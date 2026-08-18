@@ -35,6 +35,10 @@ class Decision:
     attribution: str = ""
     url: str = ""
     note: str = ""
+    #: モデル判定でのみ使う。推奨モデルかどうか
+    recommended: bool = False
+    #: どの規則で判定したか（"exact" / "family" / "deny_family" / "default"）
+    matched_by: str = ""
 
 
 ALLOWED = Decision(allowed=True)
@@ -61,7 +65,9 @@ class ResourcePolicy:
     _tool_deny: dict[str, str] = field(default_factory=dict)
     _tool_review: dict[str, str] = field(default_factory=dict)
     _library_deny: set[str] = field(default_factory=set)
-    _models: dict[str, str] = field(default_factory=dict)
+    _models: dict[str, dict[str, Any]] = field(default_factory=dict)
+    _model_allow_families: list[dict[str, Any]] = field(default_factory=list)
+    _model_deny_families: list[dict[str, Any]] = field(default_factory=list)
     _dataset_deny_reason: str = "許可リストに無いデータセット"
     _model_deny_reason: str = "許可リストに無いモデル"
 
@@ -96,7 +102,9 @@ class ResourcePolicy:
 
         models = raw.get("models") or {}
         for entry in models.get("allow") or []:
-            pol._models[entry["name"]] = entry.get("license", "unknown")
+            pol._models[entry["name"]] = entry
+        pol._model_allow_families = list(models.get("allow_families") or [])
+        pol._model_deny_families = list(models.get("deny_families") or [])
         pol._model_deny_reason = models.get("deny_reason_default", pol._model_deny_reason)
         return pol
 
@@ -111,6 +119,11 @@ class ResourcePolicy:
         return sorted(self._datasets)
 
     def allowed_model_names(self) -> list[str]:
+        """明示的に列挙している推奨モデル名（未取得でも UI に出すため）。
+
+        ファミリー規則で許可されるモデルはここには出ない。
+        実際に使えるモデルの一覧は biomni_hypo.models.list_local_models() を使う。
+        """
         return sorted(self._models)
 
     def denied_tool_names(self) -> list[str]:
@@ -144,10 +157,51 @@ class ResourcePolicy:
         return ALLOWED
 
     def check_model(self, name: str) -> Decision:
-        lic = self._models.get(name)
-        if lic is None:
-            return Decision(allowed=False, reason=self._model_deny_reason)
-        return Decision(allowed=True, license=lic)
+        """ローカルにある任意のモデル名を判定する。
+
+        Ollama のモデル名はタグ付き（`qwen3:8b-instruct-q4_K_M`）なので、
+        完全一致だけでは実際に pull されているモデルを拾えない。
+        ファミリー名の前方一致で判定し、拒否ファミリーを許可より優先する。
+        """
+        family = model_family(name)
+
+        for entry in self._model_deny_families:
+            if family.startswith(str(entry["match"]).lower()):
+                return Decision(
+                    allowed=False,
+                    reason=entry.get("reason", "商用利用ポリシーにより不可"),
+                    license=entry.get("license", "unknown"),
+                    matched_by="deny_family",
+                )
+
+        exact = self._models.get(name)
+        if exact is not None:
+            return Decision(
+                allowed=True,
+                license=exact.get("license", "unknown"),
+                note=exact.get("note", ""),
+                recommended=bool(exact.get("recommended")),
+                matched_by="exact",
+            )
+
+        # 完全一致しなくても、推奨リストと同じファミリーなら推奨扱いにする
+        recommended_families = {
+            model_family(n) for n, e in self._models.items() if e.get("recommended")
+        }
+        for entry in self._model_allow_families:
+            if family.startswith(str(entry["match"]).lower()):
+                return Decision(
+                    allowed=True,
+                    license=entry.get("license", "unknown"),
+                    note=entry.get("note", ""),
+                    recommended=family in recommended_families,
+                    matched_by="family",
+                )
+
+        return Decision(allowed=False, reason=self._model_deny_reason, matched_by="default")
+
+    def recommended_model_names(self) -> list[str]:
+        return sorted(n for n, e in self._models.items() if e.get("recommended"))
 
     # ------------------------------------------------------ code static check
 
@@ -210,3 +264,18 @@ class ResourcePolicy:
             review_required=d.review_required,
             step_idxs=step_idxs or [],
         )
+
+
+def model_family(name: str) -> str:
+    """Ollama のモデル名からファミリー名を取り出す。
+
+    >>> model_family("qwen3:8b-instruct-q4_K_M")
+    'qwen3'
+    >>> model_family("library/gpt-oss:20b")
+    'gpt-oss'
+    >>> model_family("hf.co/user/Qwen3-14B-GGUF:Q4_K_M")
+    'qwen3-14b-gguf'
+    """
+    base = name.split(":", 1)[0]
+    base = base.rsplit("/", 1)[-1]
+    return base.strip().lower()

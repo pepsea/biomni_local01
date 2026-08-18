@@ -1,4 +1,4 @@
-.PHONY: help install install-min test lint notebook api fetch check
+.PHONY: help install install-min test lint notebook api models fetch check
 
 help:
 	@echo "install      依存を全部入れる（biomni 含む・重い）"
@@ -7,6 +7,7 @@ help:
 	@echo "lint         ruff"
 	@echo "notebook     JupyterLab を起動"
 	@echo "api          FastAPI を起動"
+	@echo "models       ローカルの Ollama にあるモデルを一覧"
 	@echo "fetch        許可リストのデータセットを取得"
 	@echo "check        lint + test"
 
@@ -27,6 +28,9 @@ notebook:
 
 api:
 	uvicorn backend.app.main:app --reload --port 8000
+
+models:
+	python scripts/list_models.py
 
 fetch:
 	python scripts/fetch_datasets.py

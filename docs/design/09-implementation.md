@@ -25,6 +25,7 @@ backend/app/ ──────>│   ここにロジックを集約する      
 | `config.py` | 設定と、**biomni の環境変数を import 前に適用する** `apply_biomni_env()` | 04 §4.3 |
 | `policy.py` | 商用限定のリソースポリシー。既定拒否 | 05 §5.2 |
 | `llm.py` | `ChatOllama` の構築（stop / num_ctx / base_url）と疎通確認 | 04 §4.1, §4.2 |
+| `models.py` | ローカルモデルの探索・ライセンス判定・選択・num_ctx の丸め | 04 §4.7 |
 | `agent_factory.py` | A1 の構築。**Ollama の落とし穴をすべてここに封じる** | 04 全体 |
 | `guard.py` | コード実行直前のポリシー検査（最後の砦） | 05 §5.2 強制ポイント 3 |
 | `tracing.py` | A1 の LangGraph を直接ストリームして Step に構造化 | 02 §2.3 |
@@ -92,6 +93,7 @@ pytest -q     # 96 件
 | `test_tracing.py` | ステップ分類。**observation の自己生成検知（AC-1）**。ガードの復元 |
 | `test_pipeline.py` | エンドツーエンド。抽出失敗でランを落とさないこと。レポート内容 |
 | `test_api.py` | ポリシー違反モデルの拒否。SSE の再送 |
+| `test_models.py` | ファミリー単位のライセンス判定。使えないモデルを理由付きで返すこと |
 | `test_notebooks.py` | ノートブックの構文。出力を含めないこと。ロジックを書かないこと |
 | `test_integration_biomni.py` | **実物の biomni** に対する検証。biomni 未インストールならスキップ |
 
@@ -134,7 +136,22 @@ biomni 0.0.8 を実際にインストールし、モック Ollama サーバ（04
 
 2 で ❌ が出たら、そこから先の出力はすべて信用できない。まずモデルを大きくすること。
 
-## 9.7 次の実装ステップ
+## 9.7 モデル選択の流れ
+
+「どのモデルが使えるか」の判定を 1 箇所に集める。CLI もノートブックも API も同じ関数を通る。
+
+```
+scripts/list_models.py ─┐
+notebooks/00, 04       ─┼─> biomni_hypo.models.apply_model_selection()
+POST /api/runs         ─┤        ├─ list_local_models()   Ollama の /api/tags, /api/show
+biomni_hypo.build_agent ┘        ├─ policy.check_model()  ファミリー単位のライセンス判定
+                                 └─ resolve_num_ctx()     モデル上限への丸め
+```
+
+`build_agent()` も既定で通る（`resolve_model=True`）ので、ノートブックから直接
+`build_agent()` を呼んでも、未取得モデルや上限超えの `num_ctx` はそこで捕まる。
+
+## 9.8 次の実装ステップ
 
 1. **React フロントエンド**（07 の画面設計）。API と SSE は既にある
 2. **ユーザーデータのアップロード**（`POST /api/uploads` → `agent.add_data()`）

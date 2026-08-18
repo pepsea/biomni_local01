@@ -3,16 +3,35 @@ from fastapi.testclient import TestClient
 
 import backend.app.main as main
 
+LOCAL_MODELS = [
+    ("qwen3:14b", 9_276_055_800, 40960),
+    ("llama3.1:8b", 4_900_000_000, 131072),
+]
+
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     from backend.app.store import RunStore
 
     monkeypatch.setattr(main, "STORE", RunStore(tmp_path / "runs.sqlite3"))
+    monkeypatch.setattr(main, "_model_catalog", None)
     main._running.clear()
     main._subscribers.clear()
     main._seq.clear()
     return TestClient(main.app)
+
+
+@pytest.fixture
+def client_with_ollama(client, monkeypatch):
+    """モック Ollama を向いた状態のクライアント。"""
+    from biomni_hypo.mock_ollama import MockOllama
+
+    with MockOllama(models=LOCAL_MODELS) as mock:
+        settings = main.SETTINGS.model_copy(deep=True)
+        settings.ollama_base_url = mock.base_url
+        monkeypatch.setattr(main, "SETTINGS", settings)
+        monkeypatch.setattr(main, "_model_catalog", None)
+        yield client, mock
 
 
 def test_health(client):
@@ -37,10 +56,54 @@ def test_models_endpoint_lists_allowed_models_even_when_not_pulled(client):
     assert all(m["allowed"] for m in body["models"] if m["name"] == "qwen3:14b")
 
 
-def test_run_with_denied_model_is_rejected(client):
+def test_models_endpoint_reads_local_ollama(client_with_ollama):
+    client, _mock = client_with_ollama
+    body = client.get("/api/models").json()
+
+    assert body["ollama"]["reachable"] is True
+    by_name = {m["name"]: m for m in body["models"]}
+
+    qwen = by_name["qwen3:14b"]
+    assert qwen["installed"] and qwen["allowed"] and qwen["recommended"]
+    assert qwen["max_context"] == 40960
+    assert qwen["size_gb"] == pytest.approx(9.3)
+
+    # 使えないモデルも理由付きで返す
+    llama = by_name["llama3.1:8b"]
+    assert llama["installed"] and not llama["allowed"]
+    assert "MAU" in llama["reason"]
+
+    assert body["selectable"] == ["qwen3:14b"]
+    assert body["default"] == "qwen3:14b"
+
+
+def test_health_reports_selectable_models(client_with_ollama):
+    client, _mock = client_with_ollama
+    body = client.get("/api/health").json()
+    assert body["models"]["selectable"] == ["qwen3:14b"]
+    assert body["models"]["blocked"][0]["name"] == "llama3.1:8b"
+
+
+def test_run_with_denied_model_is_rejected(client_with_ollama):
+    client, _mock = client_with_ollama
     r = client.post("/api/runs", json={"question": "q", "model": "llama3.1:8b"})
     assert r.status_code == 422
-    assert "policy_violation" in r.text
+    assert "model_unavailable" in r.text
+    assert "MAU" in r.text
+
+
+def test_run_with_model_not_pulled_is_rejected_with_a_hint(client_with_ollama):
+    client, _mock = client_with_ollama
+    r = client.post("/api/runs", json={"question": "q", "model": "qwen3:32b"})
+    assert r.status_code == 422
+    assert "ollama pull" in r.text
+
+
+def test_run_without_ollama_is_rejected(client):
+    """Ollama 未起動なら、ラン開始前に 422 で止める。"""
+    r = client.post("/api/runs", json={"question": "q"})
+    assert r.status_code == 422
+    assert "model_unavailable" in r.text
 
 
 def test_run_requires_a_question(client):

@@ -190,19 +190,65 @@ data: {"seq":10,"status":"failed","error":"ollama connection refused",
 
 ### `GET /api/models`
 
+ローカル（Ollama）にあるモデルを読み込んで返す。`?refresh=true` でキャッシュを捨てて取り直す
+（`ollama pull` した直後に使う）。
+
 ```jsonc
 {
   "models": [
-    {"name":"qwen3:14b","size_gb":9.3,"license":"Apache-2.0","allowed":true,"loaded":true},
-    {"name":"llama3.1:8b","size_gb":4.9,"license":"Llama Community",
-     "allowed":false,"reason":"商用利用ポリシーにより不可"}
+    {"name":"qwen3:14b","installed":true,"allowed":true,"recommended":true,
+     "size_gb":9.3,"parameter_size":"14.8B","quantization":"Q4_K_M",
+     "max_context":40960,"license":"Apache-2.0","matched_by":"exact","reason":"","note":""},
+    {"name":"qwen3:8b-instruct-q4_K_M","installed":true,"allowed":true,
+     "max_context":40960,"license":"Apache-2.0","matched_by":"family"},
+    {"name":"llama3.1:8b","installed":true,"allowed":false,
+     "license":"Llama Community License","matched_by":"deny_family",
+     "reason":"MAU 条項と命名条項があるため既定で不可"},
+    {"name":"qwen3:32b","installed":false,"allowed":true,"license":"Apache-2.0"}
   ],
-  "ollama": {"base_url":"http://ollama:11434","reachable":true,"version":"..."}
+  "selectable": ["qwen3:14b", "qwen3:8b-instruct-q4_K_M"],
+  "default": "qwen3:14b",
+  "configured": "qwen3:14b",
+  "ollama": {"base_url":"http://ollama:11434","reachable":true,"error":""}
 }
 ```
 
-Ollama の `/api/tags` を叩いてポリシーと突き合わせる。**不許可モデルも理由付きで返す**
-（黙って消すと「モデルが出てこない」という問い合わせになる）。
+- `installed: true` + `allowed: true` が実際の選択肢（`selectable`）
+- **不許可モデルも `reason` 付きで返す。** 黙って消すと「モデルが出てこない」になる
+- `installed: false` は未取得の推奨モデル。何を `ollama pull` すればよいか分かるように出す
+- `matched_by` は判定根拠（`exact` / `family` / `deny_family` / `default`）
+- `max_context` は `POST /api/show` の `<arch>.context_length`。許可モデルのみ取得する
+
+### モデル指定つきのラン開始
+
+```jsonc
+POST /api/runs
+{
+  "question": "...",
+  "model": "qwen3:8b-instruct-q4_K_M",     // 省略時は configured -> default の順
+  "extractor_model": "qwen3:14b",          // 仮説抽出だけ別モデルにする場合
+  "options": { "num_ctx": 131072 }
+}
+```
+
+```jsonc
+202 Accepted
+{
+  "run_id": "r_20260818...",
+  "status": "running",
+  "model": "qwen3:8b-instruct-q4_K_M",
+  "num_ctx": 40960,                        // モデルの上限に丸められた
+  "notes": ["qwen3:8b-instruct-q4_K_M の上限 40,960 に合わせて 131,072 から丸めました"]
+}
+```
+
+使えないモデルは **ランを開始する前に** 422 で止める。
+
+| 状況 | レスポンス |
+| --- | --- |
+| ライセンス不可 | `{"error":"model_unavailable","detail":"... MAU 条項と命名条項があるため既定で不可"}` |
+| 未取得 | `{"error":"model_unavailable","detail":"qwen3:32b は未取得です（ollama pull qwen3:32b）"}` |
+| Ollama 未起動 | `{"error":"model_unavailable","detail":"Ollama に到達できません ..."}` |
 
 ### `POST /api/uploads`
 

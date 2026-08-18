@@ -21,6 +21,7 @@ from backend.app.store import RunStore
 from backend.app.worker import spawn
 from biomni_hypo.config import Settings
 from biomni_hypo.llm import ollama_status
+from biomni_hypo.models import ModelNotAvailable, apply_model_selection, list_local_models
 from biomni_hypo.policy import ResourcePolicy
 from biomni_hypo.report import to_markdown
 from biomni_hypo.schemas import RunResult
@@ -33,6 +34,9 @@ app = FastAPI(title="Biomni Hypothesis Builder", version=__version__)
 SETTINGS = Settings()
 POLICY = ResourcePolicy.load(SETTINGS.policy_path)
 STORE = RunStore(Path(SETTINGS.workspace_path) / "runs.sqlite3")
+
+#: モデル一覧のキャッシュ（/api/tags と /api/show を毎回叩かない）
+_model_catalog: Any = None
 
 #: run_id -> 購読者の asyncio.Queue 群
 _subscribers: dict[str, set[asyncio.Queue]] = {}
@@ -54,8 +58,19 @@ class RunOptions(BaseModel):
 
 class RunRequest(BaseModel):
     question: str = Field(min_length=1)
+    #: 省略時は設定のモデル。使えなければローカルから既定を選ぶ
     model: str | None = None
+    #: 仮説抽出だけ別モデルにしたい場合
+    extractor_model: str | None = None
     options: RunOptions = Field(default_factory=RunOptions)
+
+
+def _catalog(refresh: bool = False):
+    """モデル一覧。pull した直後は `?refresh=true` で取り直す。"""
+    global _model_catalog
+    if refresh or _model_catalog is None:
+        _model_catalog = list_local_models(SETTINGS, POLICY)
+    return _model_catalog
 
 
 # ---------------------------------------------------------------- イベント配信
@@ -110,10 +125,18 @@ async def _drain(run_id: str, proc: Any, mp_queue: Any) -> None:
 @app.get("/api/health")
 async def health() -> dict[str, Any]:
     st = ollama_status(SETTINGS.ollama_base_url, timeout=3)
+    catalog = _catalog()
+    default = catalog.default(preferred=SETTINGS.model)
     return {
         "api": "ok",
         "version": __version__,
         "ollama": {"reachable": st.reachable, "base_url": st.base_url, "models": st.models, "error": st.error},
+        "models": {
+            "configured": SETTINGS.model,
+            "default": default.name if default else None,
+            "selectable": [m.name for m in catalog.selectable],
+            "blocked": [{"name": m.name, "reason": m.reason} for m in catalog.blocked],
+        },
         "policy_version": POLICY.version,
         "running": list(_running),
         "commercial_mode": SETTINGS.commercial_mode,
@@ -132,33 +155,26 @@ async def policy() -> dict[str, Any]:
 
 
 @app.get("/api/models")
-async def models() -> dict[str, Any]:
-    st = ollama_status(SETTINGS.ollama_base_url, timeout=3)
-    out = []
-    for name in st.models:
-        d = POLICY.check_model(name)
-        out.append(
-            {
-                "name": name,
-                "license": d.license,
-                "allowed": d.allowed,
-                "reason": d.reason,
-                "loaded": True,
-            }
-        )
-    # pull されていない許可モデルも見せる（何を pull すればよいか分かるように）
-    for name in POLICY.allowed_model_names():
-        if name not in st.models:
-            out.append(
-                {
-                    "name": name,
-                    "license": POLICY.check_model(name).license,
-                    "allowed": True,
-                    "reason": "",
-                    "loaded": False,
-                }
-            )
-    return {"models": out, "ollama": {"reachable": st.reachable, "base_url": st.base_url}}
+async def models(refresh: bool = False) -> dict[str, Any]:
+    """ローカル（Ollama）にあるモデルを読み込んで返す。
+
+    - 取得済みでポリシー許可 -> `allowed: true`。これが選択肢になる
+    - 取得済みだがライセンス不可 -> `allowed: false` + `reason`。**隠さずに理由付きで返す**
+    - 未取得の推奨モデル -> `installed: false`。何を pull すればよいか分かるように
+    """
+    catalog = _catalog(refresh=refresh)
+    default = catalog.default(preferred=SETTINGS.model)
+    return {
+        "models": [m.as_dict() for m in catalog.models],
+        "selectable": [m.name for m in catalog.selectable],
+        "default": default.name if default else None,
+        "configured": SETTINGS.model,
+        "ollama": {
+            "reachable": catalog.reachable,
+            "base_url": catalog.base_url,
+            "error": catalog.error,
+        },
+    }
 
 
 @app.post("/api/runs", status_code=202)
@@ -167,14 +183,25 @@ async def create_run(req: RunRequest) -> dict[str, Any]:
         raise HTTPException(409, {"error": "queue_full", "running": list(_running)})
 
     settings = SETTINGS.model_copy(deep=True)
-    if req.model:
-        settings.model = req.model
     for field, value in req.options.model_dump(exclude_none=True).items():
         setattr(settings, field, value)
+    if req.extractor_model:
+        settings.extractor_model = req.extractor_model
 
-    decision = POLICY.check_model(settings.model)
-    if not decision.allowed:
-        raise HTTPException(422, {"error": "policy_violation", "detail": decision.reason})
+    # ローカルのモデルを読んで選択・ライセンス判定・num_ctx の丸めを行う。
+    # ノートブックや CLI と同じ関数を通す。
+    try:
+        _, notes = apply_model_selection(settings, POLICY, model=req.model, catalog=_catalog())
+    except ModelNotAvailable as exc:
+        raise HTTPException(422, {"error": "model_unavailable", "detail": str(exc)}) from exc
+
+    if settings.extractor_model:
+        extractor_decision = POLICY.check_model(settings.extractor_model)
+        if not extractor_decision.allowed:
+            raise HTTPException(
+                422,
+                {"error": "model_unavailable", "detail": f"抽出用モデル: {extractor_decision.reason}"},
+            )
 
     run_id = f"r_{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
     run = RunResult(
@@ -188,8 +215,14 @@ async def create_run(req: RunRequest) -> dict[str, Any]:
     proc, mp_queue = spawn(run_id, req.question, settings.model_dump())
     _running[run_id] = proc
     asyncio.create_task(_drain(run_id, proc, mp_queue))
-    await _publish(run_id, "status", {"status": "running"})
-    return {"run_id": run_id, "status": "running"}
+    await _publish(run_id, "status", {"status": "running", "model": settings.model, "notes": notes})
+    return {
+        "run_id": run_id,
+        "status": "running",
+        "model": settings.model,
+        "num_ctx": settings.num_ctx,
+        "notes": notes,
+    }
 
 
 @app.get("/api/runs")

@@ -32,7 +32,8 @@ class MockOllama:
     """
 
     replies: list[str] = field(default_factory=lambda: ["ok"])
-    models: list[str] = field(default_factory=lambda: ["qwen3:14b"])
+    #: /api/tags が返すモデル。名前だけ、または (名前, サイズ, context長) のタプル
+    models: list[Any] = field(default_factory=lambda: ["qwen3:14b"])
     requests: list[dict[str, Any]] = field(default_factory=list)
     _server: ThreadingHTTPServer | None = None
     _thread: threading.Thread | None = None
@@ -83,14 +84,7 @@ class MockOllama:
                 path = self.path.split("?")[0]
                 self._record({})
                 if path == "/api/tags":
-                    self._json(
-                        {
-                            "models": [
-                                {"name": m, "model": m, "size": 1, "digest": "x", "details": {}}
-                                for m in mock.models
-                            ]
-                        }
-                    )
+                    self._json({"models": [_tag_entry(m) for m in mock.models]})
                 elif path in ("/", "/api/version"):
                     self._json({"version": "mock"})
                 else:
@@ -107,7 +101,8 @@ class MockOllama:
 
                 path = self.path.split("?")[0]
                 if path == "/api/show":
-                    self._json({"model_info": {}, "capabilities": ["completion"], "details": {}})
+                    name = body.get("model") or body.get("name") or ""
+                    self._json(_show_entry(name, mock.models))
                     return
                 if path != "/api/chat":
                     self._json({"error": "not found"}, 404)
@@ -150,6 +145,56 @@ class MockOllama:
             self._server.server_close()
         if self._thread is not None:
             self._thread.join(timeout=5)
+
+
+def _spec(entry: Any) -> tuple[str, int, int]:
+    """"qwen3:14b" または ("qwen3:14b", size_bytes, context_length) を正規化する。"""
+    if isinstance(entry, (tuple, list)):
+        name = str(entry[0])
+        size = int(entry[1]) if len(entry) > 1 else 1
+        ctx = int(entry[2]) if len(entry) > 2 else 40960
+        return name, size, ctx
+    return str(entry), 1, 40960
+
+
+def _tag_entry(entry: Any) -> dict[str, Any]:
+    name, size, _ctx = _spec(entry)
+    family = name.split(":", 1)[0].rsplit("/", 1)[-1]
+    return {
+        "name": name,
+        "model": name,
+        "modified_at": "2024-01-01T00:00:00Z",
+        "size": size,
+        "digest": "0" * 64,
+        "details": {
+            "parent_model": "",
+            "format": "gguf",
+            "family": family,
+            "families": [family],
+            "parameter_size": "14.8B",
+            "quantization_level": "Q4_K_M",
+        },
+    }
+
+
+def _show_entry(name: str, entries: list[Any]) -> dict[str, Any]:
+    ctx = 40960
+    for entry in entries:
+        entry_name, _size, entry_ctx = _spec(entry)
+        if entry_name == name:
+            ctx = entry_ctx
+            break
+    family = name.split(":", 1)[0].rsplit("/", 1)[-1] or "mock"
+    return {
+        "license": "mock",
+        "details": {"family": family, "format": "gguf"},
+        "model_info": {
+            "general.architecture": family,
+            f"{family}.context_length": ctx,
+            f"{family}.embedding_length": 5120,
+        },
+        "capabilities": ["completion", "tools"],
+    }
 
 
 def _chat_final(model: str, content: str) -> dict[str, Any]:

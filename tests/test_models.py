@@ -1,0 +1,216 @@
+"""ローカルモデルの探索と選択."""
+
+import pytest
+
+from biomni_hypo.config import Settings
+from biomni_hypo.mock_ollama import MockOllama
+from biomni_hypo.models import (
+    ModelNotAvailable,
+    apply_model_selection,
+    list_local_models,
+    resolve_num_ctx,
+)
+from biomni_hypo.policy import ResourcePolicy, model_family
+
+# (名前, サイズ, context長)
+LOCAL = [
+    ("qwen3:14b", 9_276_055_800, 40960),
+    ("qwen3:8b-instruct-q4_K_M", 5_200_000_000, 40960),
+    ("llama3.1:8b", 4_900_000_000, 131072),
+    ("gemma3:12b", 8_100_000_000, 131072),
+    ("deepseek-r1:7b", 4_700_000_000, 131072),
+    ("weird-model:1b", 900_000_000, 8192),
+]
+
+
+@pytest.fixture(scope="module")
+def policy():
+    return ResourcePolicy.load()
+
+
+@pytest.fixture
+def catalog(policy):
+    with MockOllama(models=LOCAL) as mock:
+        s = Settings()
+        s.ollama_base_url = mock.base_url
+        yield list_local_models(s, policy)
+
+
+# ------------------------------------------------------------ ファミリー判定
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("qwen3:14b", "qwen3"),
+        ("qwen3:8b-instruct-q4_K_M", "qwen3"),
+        ("QWEN3:4b", "qwen3"),
+        ("library/gpt-oss:20b", "gpt-oss"),
+        ("hf.co/user/Qwen3-14B-GGUF:Q4_K_M", "qwen3-14b-gguf"),
+    ],
+)
+def test_model_family(name, expected):
+    assert model_family(name) == expected
+
+
+def test_tagged_variants_are_allowed(policy):
+    """完全一致リストに無くても、ファミリーが同じなら許可する。"""
+    d = policy.check_model("qwen3:8b-instruct-q4_K_M")
+    assert d.allowed and d.license == "Apache-2.0" and d.matched_by == "family"
+
+
+@pytest.mark.parametrize(
+    ("name", "fragment"),
+    [
+        ("llama3.1:8b", "MAU"),
+        ("gemma3:12b", "利用制限"),
+        ("command-r:35b", "非商用"),
+        ("codestral:22b", "非商用"),
+        ("mistral-large:123b", "研究用途"),
+        ("deepseek-coder-v2:16b", "用途制限"),
+    ],
+)
+def test_denied_families(policy, name, fragment):
+    d = policy.check_model(name)
+    assert not d.allowed
+    assert fragment in d.reason
+    assert d.license != "unknown", "拒否理由と一緒にライセンス名も出すこと"
+
+
+def test_deny_beats_allow(policy):
+    """mistral は Apache-2.0 だが mistral-large は研究用途限定。拒否が勝つこと。"""
+    assert policy.check_model("mistral-small:24b").allowed
+    assert not policy.check_model("mistral-large:123b").allowed
+
+
+def test_unknown_model_is_denied_by_default(policy):
+    d = policy.check_model("something-nobody-knows:1b")
+    assert not d.allowed and d.matched_by == "default"
+
+
+# ------------------------------------------------------------ カタログ
+
+
+def test_catalog_reads_local_models(catalog):
+    assert catalog.reachable
+    names = {m.name for m in catalog.models if m.installed}
+    assert names == {n for n, _s, _c in LOCAL}
+
+
+def test_selectable_excludes_denied_models(catalog):
+    assert [m.name for m in catalog.selectable] == [
+        "qwen3:14b",
+        "qwen3:8b-instruct-q4_K_M",
+        "deepseek-r1:7b",
+    ]
+
+
+def test_blocked_models_are_listed_with_reasons(catalog):
+    """使えないモデルも理由付きで返す。黙って消すと「出てこない」と言われる。"""
+    blocked = {m.name: m for m in catalog.blocked}
+    assert set(blocked) == {"llama3.1:8b", "gemma3:12b", "weird-model:1b"}
+    assert all(m.reason for m in blocked.values())
+
+
+def test_not_installed_recommendations_are_included(catalog):
+    not_installed = [m for m in catalog.models if not m.installed]
+    assert "qwen3:32b" in {m.name for m in not_installed}
+    assert all(m.max_context == 0 for m in not_installed)
+
+
+def test_metadata_is_populated(catalog):
+    m = catalog.get("qwen3:14b")
+    assert m.size_gb == pytest.approx(9.3)
+    assert m.max_context == 40960
+    assert m.quantization == "Q4_K_M"
+    assert m.recommended
+
+
+def test_context_length_is_only_fetched_for_allowed_models(catalog):
+    assert catalog.get("llama3.1:8b").max_context == 0
+
+
+def test_default_prefers_the_configured_model(catalog):
+    assert catalog.default(preferred="deepseek-r1:7b").name == "deepseek-r1:7b"
+
+
+def test_default_falls_back_to_largest_recommended(catalog):
+    assert catalog.default(preferred="llama3.1:8b").name == "qwen3:14b"
+
+
+def test_table_renders(catalog):
+    table = catalog.as_table()
+    assert "qwen3:14b" in table and "★" in table and "✕" in table
+
+
+# ------------------------------------------------------------ num_ctx
+
+
+def test_num_ctx_is_clamped_to_the_model_limit(catalog):
+    resolved, note = resolve_num_ctx(catalog.get("qwen3:14b"), 65536)
+    assert resolved == 40960
+    assert "丸めました" in note
+
+
+def test_num_ctx_under_the_limit_is_kept(catalog):
+    resolved, note = resolve_num_ctx(catalog.get("qwen3:14b"), 32768)
+    assert resolved == 32768 and note == ""
+
+
+def test_warns_when_the_system_prompt_eats_the_context(catalog):
+    _resolved, note = resolve_num_ctx(catalog.get("qwen3:14b"), 32768, prompt_tokens=30000)
+    assert "残り" in note
+
+
+# ------------------------------------------------------------ 選択の適用
+
+
+def test_apply_selection_sets_model_and_clamps_num_ctx(policy):
+    with MockOllama(models=LOCAL) as mock:
+        s = Settings()
+        s.ollama_base_url = mock.base_url
+        s.num_ctx = 131072
+        _catalog, notes = apply_model_selection(s, policy, model="qwen3:14b")
+    assert s.model == "qwen3:14b"
+    assert s.num_ctx == 40960
+    assert any("丸めました" in n for n in notes)
+
+
+def test_apply_selection_rejects_denied_model(policy):
+    with MockOllama(models=LOCAL) as mock:
+        s = Settings()
+        s.ollama_base_url = mock.base_url
+        with pytest.raises(ModelNotAvailable, match="ポリシー"):
+            apply_model_selection(s, policy, model="llama3.1:8b")
+
+
+def test_apply_selection_rejects_missing_model_with_a_pull_hint(policy):
+    with MockOllama(models=LOCAL) as mock:
+        s = Settings()
+        s.ollama_base_url = mock.base_url
+        with pytest.raises(ModelNotAvailable, match="ollama pull"):
+            apply_model_selection(s, policy, model="qwen3:70b")
+
+
+def test_non_strict_mode_falls_back_instead_of_raising(policy):
+    with MockOllama(models=LOCAL) as mock:
+        s = Settings()
+        s.ollama_base_url = mock.base_url
+        _catalog, notes = apply_model_selection(s, policy, model="llama3.1:8b", strict=False)
+    assert s.model == "qwen3:14b"
+    assert any("代わりに選びました" in n for n in notes)
+
+
+def test_unreachable_ollama_is_reported(policy):
+    s = Settings()
+    s.ollama_base_url = "http://127.0.0.1:1"  # 誰もいないポート
+    with pytest.raises(ModelNotAvailable, match="到達できません"):
+        apply_model_selection(s, policy)
+
+
+def test_no_usable_model_at_all(policy):
+    with MockOllama(models=[("llama3.1:8b", 1, 8192)]) as mock:
+        s = Settings()
+        s.ollama_base_url = mock.base_url
+        _catalog, notes = apply_model_selection(s, policy, strict=False)
+    assert any("使用できるモデルが 1 つもありません" in n for n in notes)

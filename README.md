@@ -16,7 +16,8 @@
 | コアパッケージ (`biomni_hypo/`) | ✅ 実装済み |
 | 検証ノートブック (`notebooks/`) | ✅ 5 本 |
 | API + SSE (`backend/`) | ✅ 実装済み・実サーバで動作確認 |
-| テスト | ✅ **108 件**（うち 12 件は実物の biomni に対する統合テスト） |
+| テスト | ✅ **144 件**（うち 12 件は実物の biomni に対する統合テスト） |
+| モデル選択 | ✅ ローカルの Ollama を読み込んで選択（ライセンス判定つき） |
 | React フロントエンド | ⬜ 未着手（設計は [07](docs/design/07-ui-design.md)） |
 
 **検証済み**: biomni 0.0.8 を実際にインストールし、モック Ollama サーバを相手に
@@ -67,6 +68,33 @@ ollama pull qwen3:14b
 python scripts/fetch_datasets.py --only gwas_catalog.pkl gene_info.parquet
 ```
 
+**4. モデルを選ぶ**
+
+ローカルに pull 済みのモデルを読み込んで、商用利用ポリシーで判定する。
+
+```bash
+python scripts/list_models.py          # 一覧（make models）
+```
+
+```
+★ qwen3:14b                   9.3GB   40,960 Apache-2.0
+★ qwen3:8b-instruct-q4_K_M    5.2GB   40,960 Apache-2.0
+✓ deepseek-r1:7b              4.7GB  131,072 MIT         思考トークンが長い。stop 制御を要検証
+✕ llama3.1:8b                 4.9GB        - Llama Community License  MAU 条項と命名条項があるため既定で不可
+✕ gemma3:12b                  8.1GB        - Gemma Terms of Use       利用制限条項があるため既定で不可
+… qwen3:32b                       -        - Apache-2.0  未取得: ollama pull qwen3:32b
+
+★ 推奨 / ✓ 選択可 / ✕ ライセンス不可 / … 未取得
+```
+
+```bash
+python scripts/list_models.py --set qwen3:8b   # .env の既定を変える
+```
+
+タグ違い（`qwen3:8b-instruct-q4_K_M` など）もファミリー名で判定するので、
+許可リストに無い名前でも正しく拾う。**使えないモデルも理由付きで表示する**（黙って隠さない）。
+`num_ctx` はモデルの上限に自動で丸められる。
+
 ### 3. ノートブックで検証する
 
 ```bash
@@ -88,8 +116,9 @@ make api            # uvicorn backend.app.main:app --port 8000
 ```
 
 ```bash
+curl -s localhost:8000/api/models                   # ローカルのモデル一覧
 curl -X POST localhost:8000/api/runs -H 'content-type: application/json' \
-  -d '{"question": "TNBC で PARP 阻害剤耐性を規定する因子は？"}'
+  -d '{"question": "TNBC で PARP 阻害剤耐性を規定する因子は？", "model": "qwen3:14b"}'
 curl -N localhost:8000/api/runs/<run_id>/events     # SSE でトレースが流れる
 curl -s localhost:8000/api/runs/<run_id>/report     # Markdown レポート
 ```
@@ -100,11 +129,12 @@ Docker なら `docker compose up`（ollama + api）。
 
 ```
 biomni_hypo/     共有コアパッケージ ← ノートブックも Web アプリもここを呼ぶ
+  models.py      ローカルモデルの探索・ライセンス判定・選択
 notebooks/       検証ハーネス（ロジックは書かない。テストで強制）
 backend/app/     FastAPI + SSE + ラン実行ワーカー（子プロセス）
 config/          resource_policy.yaml（商用限定・既定拒否）
-scripts/         データセット取得
-tests/           108 件。うち 96 件は外部サービス不要で 1 秒未満
+scripts/         データセット取得・モデル一覧・ローカルセットアップ
+tests/           144 件。うち 132 件は外部サービス不要
 docs/design/     設計書
 ```
 

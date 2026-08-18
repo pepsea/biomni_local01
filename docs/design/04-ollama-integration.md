@@ -184,18 +184,73 @@ S3 から取得しようとする**（さらに benchmark ディレクトリも�
 `AttributeError` になる経路が存在する（A1 は必ず model を渡すため通常は踏まない）。
 **本アプリからは `get_llm(config=...)` を使わず、常に model を明示する**（§4.1 の差し替えで回避済み）。
 
-## 4.7 モデル選定
+## 4.7 モデル選定 — ローカルから読み込んで選ぶ
 
-| モデル | ライセンス | 用途 | 所感 |
-| --- | --- | --- | --- |
-| `qwen3:14b` / `qwen3:32b` | Apache-2.0 | **推奨: 計画・コード生成** | コード生成とタグ追従が安定。14b で 24GB VRAM 目安 |
-| `gpt-oss:20b` | Apache-2.0 | 計画・コード生成 | `llm.py` が `gpt-oss` プレフィクスを Ollama と自動判定する |
-| `qwen2.5-coder:14b` | Apache-2.0 | コード生成特化 | `<execute>` の中身の質は高いが計画力は劣る |
-| `deepseek-r1:14b` | MIT | 推論重視 | 思考トークンが長く、stop 制御と相性を要検証 |
-| `gemma3` 系 | Gemma 利用規約 | — | 商用可だが利用制限条項あり。§05 の方針では非推奨 |
-| `llama3.1:8b` 等 | Llama Community License | — | 商用可だが MAU 条項・命名条項あり。§05 の方針では非推奨 |
+固定リストを持つのではなく、**`ollama pull` されているモデルを実際に読み込んで選択肢にする**
+（`biomni_hypo/models.py`）。
 
-**商用利用方針（§05）に従い、既定は Apache-2.0 / MIT のモデルに限定する。**
+```
+GET /api/tags   -> pull 済みモデル・サイズ・量子化
+POST /api/show  -> <arch>.context_length（モデルの最大 context）
+        ↓
+ResourcePolicy.check_model()  -> ライセンス判定（商用可否）
+        ↓
+ModelCatalog  -> 選択可 / 不可（理由付き） / 未取得
+```
+
+### ライセンス判定はファミリー単位
+
+Ollama のモデル名はタグ付き（`qwen3:8b-instruct-q4_K_M`）なので、名前の完全一致では
+実際に pull されているモデルを拾えない。**ファミリー名の前方一致**で判定する。
+
+判定順（`config/resource_policy.yaml` の `models`）:
+
+1. `deny_families` に前方一致 → 拒否（`allow` より強い）
+2. `allow` に完全一致 → 許可（推奨タグ付き）
+3. `allow_families` に前方一致 → 許可
+4. どれにも当たらない → 拒否（既定拒否）
+
+拒否が許可より強いのは、同じ接頭辞でライセンスが分かれるものがあるため。
+`mistral-small` / `mistral-nemo` は Apache-2.0 だが **`mistral-large` は研究用途限定**、
+`codestral` は非商用（MNPL）。`deepseek-r1` は MIT だが **`deepseek-coder-v2` は用途制限あり**。
+
+| ファミリー | ライセンス | 商用 |
+| --- | --- | --- |
+| `qwen3` / `qwen2.5` / `qwq` | Apache-2.0 | ✅ 推奨 |
+| `gpt-oss` | Apache-2.0 | ✅ |
+| `deepseek-r1` / `deepseek-v3` | MIT | ✅ |
+| `mistral` / `mixtral` / `devstral` | Apache-2.0 | ✅ |
+| `phi3` / `phi4` | MIT | ✅ |
+| `llama*` / `codellama` | Llama Community License | ❌ MAU 条項・命名条項 |
+| `gemma*` / `medgemma` | Gemma 利用規約 | ❌ 利用制限条項 |
+| `command-r` / `aya` | CC BY-NC | ❌ 非商用 |
+| `mistral-large` / `pixtral-large` | Mistral Research License | ❌ 研究用途限定 |
+| `codestral` | MNPL | ❌ 非商用 |
+| `deepseek-coder-v2` | DeepSeek License | ❌ 用途制限 |
+| 未知 | — | ❌ 既定拒否 |
+
+**使えないモデルも理由付きで一覧に出す。** 黙って消すと「モデルが出てこない」という
+問い合わせになるだけで、判断材料が残らない。
+
+### num_ctx はモデルの上限に丸める
+
+`num_ctx` にモデルの最大 context を超える値を渡すと、Ollama 側で黙って切り詰められ、
+**システムプロンプトが欠けたまま走る**。`resolve_num_ctx()` が事前に丸め、
+さらにシステムプロンプト（§4.5）を引いた残りが 8k トークンを切る場合は警告する。
+
+### 選択の入口
+
+| 入口 | 使い方 |
+| --- | --- |
+| CLI | `python scripts/list_models.py` / `--set <モデル名>` で `.env` を書き換え |
+| API | `GET /api/models` → `POST /api/runs {"model": "..."}` |
+| ノートブック | `00` と `04` の `apply_model_selection()` セル |
+
+いずれも `biomni_hypo.models.apply_model_selection()` を通る。判定基準を 1 箇所に集める。
+
+> `.env` を書き換えるときは `HYPO_MODEL` と **`BIOMNI_LLM` の両方**を変えること。
+> biomni の DB クエリツールは A1 のコンストラクタ引数ではなく `default_config` を見る（§4.3）。
+> `scripts/list_models.py --set` は両方直す。
 
 ### 役割別に別モデルを割り当てる
 

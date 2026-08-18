@@ -117,13 +117,96 @@ libraries:
     - nnunet
 
 models:
+  # ローカルの Ollama にある任意のモデルを判定できるよう、ファミリー単位で書く。
+  # `qwen3:14b` も `qwen3:8b-instruct-q4_K_M` も同じ規則で拾えるようにするため。
+  #
+  # 判定順:
+  #   1. deny_families に前方一致 -> 拒否（allow より強い）
+  #   2. allow の完全一致        -> 許可
+  #   3. allow_families に前方一致 -> 許可
+  #   4. どれにも当たらない       -> 拒否（既定拒否）
   allow_licenses: [Apache-2.0, MIT, BSD-3-Clause]
+
+  deny_families:
+    - match: llama
+      license: Llama Community License
+      reason: MAU 条項と命名条項があるため既定で不可
+    - match: codellama
+      license: Llama Community License
+      reason: 同上
+    - match: gemma
+      license: Gemma Terms of Use
+      reason: 利用制限条項があるため既定で不可
+    - match: codegemma
+      license: Gemma Terms of Use
+      reason: 同上
+    - match: medgemma
+      license: Health AI Developer Foundations Terms
+      reason: 用途制限条項があるため既定で不可
+    - match: command-r
+      license: CC-BY-NC-4.0
+      reason: 非商用ライセンス
+    - match: aya
+      license: CC-BY-NC-4.0
+      reason: 非商用ライセンス
+    - match: deepseek-coder-v2
+      license: DeepSeek License
+      reason: 用途制限条項あり。DeepSeek-R1 の MIT とは別物
+    - match: mistral-large
+      license: Mistral Research License
+      reason: 研究用途限定。同じ mistral でも small/nemo の Apache-2.0 とは別物
+    - match: codestral
+      license: MNPL
+      reason: Mistral Non-Production License（非商用）
+    - match: pixtral-large
+      license: Mistral Research License
+      reason: 研究用途限定
+
+  allow_families:
+    - match: qwen3
+      license: Apache-2.0
+      note: 推奨。コード生成とタグ追従が安定
+    - match: qwen2.5
+      license: Apache-2.0
+    - match: qwq
+      license: Apache-2.0
+    - match: gpt-oss
+      license: Apache-2.0
+    - match: deepseek-r1
+      license: MIT
+      note: 思考トークンが長い。stop 制御との相性を要検証
+    - match: deepseek-v3
+      license: MIT
+    - match: phi4
+      license: MIT
+    - match: phi3
+      license: MIT
+    - match: mistral
+      license: Apache-2.0
+    - match: mixtral
+      license: Apache-2.0
+    - match: devstral
+      license: Apache-2.0
+    - match: magistral
+      license: Apache-2.0
+    - match: olmo2
+      license: Apache-2.0
+    - match: granite3
+      license: Apache-2.0
+    - match: smollm2
+      license: Apache-2.0
+    - match: nomic-embed-text
+      license: Apache-2.0
+
+  # 動作確認済みの推奨モデル。未取得でも UI に出して pull を促す
   allow:
     - name: qwen3:14b
       license: Apache-2.0
-    - name: qwen3:32b
-      license: Apache-2.0
+      recommended: true
     - name: qwen3:8b
+      license: Apache-2.0
+      recommended: true
+    - name: qwen3:32b
       license: Apache-2.0
     - name: gpt-oss:20b
       license: Apache-2.0
@@ -133,4 +216,5 @@ models:
       license: Apache-2.0
     - name: deepseek-r1:14b
       license: MIT
-  deny_reason_default: "Llama Community License / Gemma 利用規約 などの追加条項があるモデルは既定で不可"
+
+  deny_reason_default: "ライセンス未確認のモデルです。config/resource_policy.yaml の models に追加してください"

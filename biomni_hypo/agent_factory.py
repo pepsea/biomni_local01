@@ -20,6 +20,7 @@ from typing import Any
 
 from biomni_hypo.config import Settings, apply_biomni_env
 from biomni_hypo.llm import build_agent_llm
+from biomni_hypo.models import ModelNotAvailable, apply_model_selection
 from biomni_hypo.policy import ResourcePolicy
 
 log = logging.getLogger(__name__)
@@ -126,6 +127,7 @@ def build_agent(
     *,
     tool_modules: tuple[str, ...] | None = DEFAULT_TOOL_MODULES,
     download_datasets: bool = False,
+    resolve_model: bool = True,
 ) -> AgentBundle:
     """A1 を構築して返す。
 
@@ -133,19 +135,28 @@ def build_agent(
         tool_modules: 残すモジュール。None なら絞り込みなし。
         download_datasets: True なら許可リストのデータセットを S3 から取得する。
             False（既定）だと A1 は取得をスキップし、既にディスクにあるものだけを使う。
+        resolve_model: True なら Ollama に問い合わせて、モデルが実在するか・
+            ライセンスが通るかを確認し、num_ctx をモデルの上限に丸める。
     """
     settings = settings or Settings()
     policy = policy or ResourcePolicy.load(settings.policy_path)
 
+    if resolve_model:
+        # ローカルのモデルを読み、選択・ライセンス判定・num_ctx の丸めをまとめて行う
+        catalog, notes = apply_model_selection(settings, policy)
+        for note in notes:
+            log.warning("%s", note)
+    else:
+        decision = policy.check_model(settings.model)
+        if not decision.allowed:
+            raise ModelNotAvailable(
+                f"モデル {settings.model!r} は商用利用ポリシーにより使用できません: {decision.reason}"
+            )
+
     # ★ biomni の import より前に環境変数を入れる（§4.3）。順序を入れ替えないこと。
+    # モデル名が確定してから呼ぶこと（default_config.llm にこの名前が入る）。
     applied = apply_biomni_env(settings)
     log.info("biomni env applied: %s", applied)
-
-    model_decision = policy.check_model(settings.model)
-    if not model_decision.allowed:
-        raise ValueError(
-            f"モデル {settings.model!r} は商用利用ポリシーにより使用できません: {model_decision.reason}"
-        )
 
     from biomni.agent import A1  # 遅延 import（環境変数適用後）
     from biomni.version import __version__ as biomni_version
