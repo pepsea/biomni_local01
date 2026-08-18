@@ -13,31 +13,56 @@
 | レイヤ | 状態 |
 | --- | --- |
 | 設計 (`docs/design/`) | ✅ 01〜09 |
-| コアパッケージ (`biomni_hypo/`) | ✅ 実装済み・テスト 96 件 |
+| コアパッケージ (`biomni_hypo/`) | ✅ 実装済み |
 | 検証ノートブック (`notebooks/`) | ✅ 5 本 |
-| API + SSE (`backend/`) | ✅ 実装済み |
+| API + SSE (`backend/`) | ✅ 実装済み・実サーバで動作確認 |
+| テスト | ✅ **108 件**（うち 12 件は実物の biomni に対する統合テスト） |
 | React フロントエンド | ⬜ 未着手（設計は [07](docs/design/07-ui-design.md)） |
 
-**実機（Ollama + biomni）での動作確認は未実施。** テストは外部サービスを使わない範囲のみを
-検証している。実機での確認手順は [09 §9.6](docs/design/09-implementation.md#96-実機で確認すべきこと)。
+**検証済み**: biomni 0.0.8 を実際にインストールし、モック Ollama サーバを相手に
+A1 の構築・ReAct ループ・ポリシーガード・パイプライン全体が動くことを確認した。
+
+**未検証**: 実モデルの挙動そのもの（指示に従うか、まともなコードを書けるか）。
+これは実機の Ollama でしか分からない → [09 §9.6](docs/design/09-implementation.md)
 
 ## クイックスタート
 
-### 1. まずテストだけ動かす（依存 3 つ）
+### いちばん簡単
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
-pip install pydantic pyyaml requests pytest
-pytest -q                       # 96 passed
+bash scripts/setup_local.sh          # 最小構成（テストが通るところまで）
+bash scripts/setup_local.sh --full   # biomni + Ollama モデル + データセット
 ```
 
-`biomni` も Ollama も要らない。根拠の抽出・検証・レポート生成のロジックはここで確認できる。
+### 手動でやる場合
 
-### 2. 全部入れる
+**1. まずテストだけ動かす（依存 4 つ、Ollama 不要）**
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install pydantic pyyaml requests pytest
+pytest -q                       # 96 passed（biomni 統合テストはスキップされる）
+```
+
+根拠の抽出・検証・レポート生成のロジックはこれだけで確認できる。
+
+**2. 全部入れる**
 
 ```bash
 pip install -r requirements.txt
 cp .env.example .env
+pytest -q                       # 108 passed
+```
+
+> `pip install biomni` だけでは `from biomni.agent import A1` が落ちる。
+> biomni 0.0.8 は `pandas` と `langchain-openai` を依存として宣言していないため。
+> `requirements.txt` で明示的に入れている。
+
+**3. Ollama とデータセット**
+
+```bash
+curl -fsSL https://ollama.com/install.sh | sh   # または brew install ollama
+ollama serve &
 ollama pull qwen3:14b
 python scripts/fetch_datasets.py --only gwas_catalog.pkl gene_info.parquet
 ```
@@ -79,7 +104,7 @@ notebooks/       検証ハーネス（ロジックは書かない。テストで
 backend/app/     FastAPI + SSE + ラン実行ワーカー（子プロセス）
 config/          resource_policy.yaml（商用限定・既定拒否）
 scripts/         データセット取得
-tests/           96 件。外部サービス不要で 1 秒未満
+tests/           108 件。うち 96 件は外部サービス不要で 1 秒未満
 docs/design/     設計書
 ```
 
@@ -108,17 +133,19 @@ docs/design/     設計書
 4. **商用利用は `commercial_mode=True` だけでは足りない。** Biomni の同フラグはデータセットを
    絞るがツールは絞らないため、独自ポリシーで既定拒否を敷く（`biomni_hypo/policy.py`）。
 
-## 既知の落とし穴（biomni 0.0.8 / GitHub main）
+## 既知の落とし穴（biomni 0.0.8 で実測）
 
-`biomni_hypo/agent_factory.py` にすべて封じ込めてある。詳細は [04](docs/design/04-ollama-integration.md)。
+`biomni_hypo/agent_factory.py` にすべて封じ込めてあり、`tests/test_integration_biomni.py` が
+実物に対して固定している。詳細は [04](docs/design/04-ollama-integration.md)。
 
 | # | 問題 | 対策 |
 | --- | --- | --- |
-| §4.1 | `get_llm()` の **Ollama 分岐だけ `stop_sequences` を渡していない** → モデルが実行結果を捏造する | `agent.llm` を `ChatOllama(stop=...)` に差し替え |
-| §4.2 | 同分岐は `base_url` も無視する | 同上 |
+| §4.0 | `pandas` / `langchain-openai` が依存宣言に無く、A1 を import できない | `requirements.txt` で明示 |
+| §4.1 | `get_llm()` の **Ollama 分岐だけ `stop_sequences` を渡していない** → モデルが実行結果を捏造する。実測: 送信 options が `{'temperature': 0.7}` のみ | `agent.llm` を `ChatOllama(stop=...)` に差し替え |
+| §4.2 | 同分岐は `base_url` も無視する（実測: `llm.base_url is None`。`OLLAMA_HOST` でしか変えられない） | 同上 |
 | §4.3 | `database.py` は `default_config.llm`（既定 Claude）を使う → DB ツールが外部 API を叩く | `apply_biomni_env()` を import 前に実行 |
 | §4.4 | `A1.__init__` がデータレイクを一括ダウンロードする | `expected_data_lake_files` を明示 |
-| §4.5 | リソース検索プロンプトが巨大で `num_ctx=2048` では機能しない | モジュール絞り込み + v1 は既定 OFF |
+| §4.5 | **システムプロンプトだけで `num_ctx=32768` を超える**（絞り込みなしで 38.6k トークン） | モジュールプリセットで既定 16.5k に。占有率が 40% を超えたら警告 |
 
 ## ライセンス
 

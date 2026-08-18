@@ -34,6 +34,7 @@ backend/app/ ──────>│   ここにロジックを集約する      
 | `pipeline.py` | ラン 1 本の共通エントリ `run_hypothesis()` | 02 §2.4 |
 | `report.py` | Markdown レポート（ライセンス表記を自動生成） | 03 §3.6, 05 §5.3 |
 | `fixtures.py` | オフライン検証用のフェイク（本番からは import しない） | — |
+| `mock_ollama.py` | 検証用のモック Ollama サーバ（本番からは import しない） | 04 §4.9 |
 
 ### 依存の重さを分けてある
 
@@ -92,25 +93,46 @@ pytest -q     # 96 件
 | `test_pipeline.py` | エンドツーエンド。抽出失敗でランを落とさないこと。レポート内容 |
 | `test_api.py` | ポリシー違反モデルの拒否。SSE の再送 |
 | `test_notebooks.py` | ノートブックの構文。出力を含めないこと。ロジックを書かないこと |
+| `test_integration_biomni.py` | **実物の biomni** に対する検証。biomni 未インストールならスキップ |
 
 外部依存（Ollama / biomni / ネットワーク）は**すべて注入点を用意**してあるので、
-テストは 1 秒未満で完走する。注入点は本番でも意味のある拡張点になっている
+ユニットテストは 1 秒未満で完走する。注入点は本番でも意味のある拡張点になっている
 （`EvidenceVerifier(pmid_checker=...)`, `HypothesisExtractor(llm=...)`,
 `TracingRunner(guard_module=...)`）。
 
-## 9.6 実機で確認すべきこと
+`test_integration_biomni.py` だけは実物の biomni を使う（Ollama はモックで代替、約 8 秒）。
+`pytest.importorskip` があるので、biomni の無い環境では自動でスキップされる。
 
-このリポジトリのテストは**外部サービスを使わない範囲**しか検証していない。
-Ollama と biomni を入れた実機で、次の順に確認すること。
+## 9.6 検証済みのこと / まだ検証していないこと
+
+### 検証済み（`pytest -q` で自動化されている）
+
+biomni 0.0.8 を実際にインストールし、モック Ollama サーバ（04 §4.9）を相手に確認した。
+
+| 項目 | どこで |
+| --- | --- |
+| `A1` がデータレイクをダウンロードせずに構築できる | `test_a1_builds_without_downloading_the_data_lake` |
+| **`biomni.llm.get_llm()` が stop も num_ctx も送らない**（不具合の実在） | `test_biomni_get_llm_drops_stop_sequences` |
+| `build_chat_ollama()` が stop / num_ctx を実際に HTTP へ乗せる | `test_our_builder_sends_stop_and_num_ctx` |
+| `build_agent()` 後の `agent.llm` に stop / num_ctx / base_url が入る | `test_build_agent_installs_stop_sequences` |
+| 拒否ツールがシステムプロンプトから消える | `test_denied_tools_disappear_from_the_system_prompt` |
+| 絞り込まないとプロンプトが num_ctx を溢れさせる | `test_module_presets_control_the_prompt_size` |
+| **本物の A1 の LangGraph が回り、ステップが正しく分類される** | `test_real_graph_produces_classified_steps` |
+| 本物の実行経路でポリシーガードが割り込む | `test_policy_guard_intercepts_the_real_execution_path` |
+| `run_hypothesis()` が最後まで通る | `test_full_pipeline_against_mock_ollama` |
+
+### まだ検証していない = **モデルの挙動そのもの**
+
+モックは台本どおりに応答するだけなので、次は実機でしか分からない。
 
 1. `notebooks/00` — 5 項目すべて ✅ になるか
 2. `notebooks/01` — **stop あり版で `observation を自己生成した: False` が安定して出るか**
-3. `notebooks/02` — `build_agent()` が完走し、拒否ツールがシステムプロンプトから消えているか
-4. `notebooks/04` — 受け入れ基準セルの ✅/❌
+   （配線は検証済み。残る問いは「モデルが `</execute>` を出力するか」）
+3. `notebooks/02` — 実モデルが `<execute>` にまともなコードを書けるか
+4. `notebooks/04` — 受け入れ基準セルの ✅/❌、および所要時間
 5. `make api` → `POST /api/runs` → SSE が流れるか
 
-2 で ❌ が出たら、そこから先の出力はすべて信用できない。`langchain-ollama` の
-バージョンと `build_chat_ollama()` の 1 箇所を直せば全体に効く。
+2 で ❌ が出たら、そこから先の出力はすべて信用できない。まずモデルを大きくすること。
 
 ## 9.7 次の実装ステップ
 

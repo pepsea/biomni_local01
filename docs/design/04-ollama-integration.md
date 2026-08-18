@@ -1,8 +1,24 @@
 # 04. Ollama 統合と Biomni 側の落とし穴
 
 Biomni は `source="Ollama"` を公式にサポートしているが、**そのまま A1 に渡すだけでは正しく動かない**。
-`biomni/llm.py` と `biomni/agent/a1.py` を読んで確認した具体的な問題と対策を以下に示す。
-（対象バージョン: biomni 0.0.8 / GitHub main）
+以下は biomni 0.0.8 を実際にインストールし、モック Ollama サーバ（§4.10）で
+HTTP リクエストを観測して確認した内容。数値はすべて実測値。
+
+対象バージョン: **biomni 0.0.8（PyPI）**。GitHub main とは差がある
+（main には `know_how_loader` があるが 0.0.8 には無い、など）。
+
+## 4.0 まず依存が足りない
+
+`biomni` の `pyproject.toml` が宣言している依存は `pydantic` / `langchain` / `python-dotenv` の 3 つだけだが、
+実際には `from biomni.agent import A1` の時点で追加のパッケージが要る。
+
+```
+ModuleNotFoundError: No module named 'pandas'
+ModuleNotFoundError: No module named 'langchain_openai'
+```
+
+本アプリの `requirements.txt` では `pandas` と `langchain-openai` を明示的にピン留めしている。
+`pip install biomni` だけでは A1 を import できない。
 
 ## 4.1 致命的: Ollama 分岐で stop シーケンスが落ちる
 
@@ -22,6 +38,22 @@ A1 は `stop_sequences=["</execute>", "</solution>"]` で LLM を止め、コー
 `<observation>` を差し込むことで ReAct ループを成立させている。stop が効かないと、
 **モデルが `</execute>` の先に `<observation>` まで自分で書いてしまい、実行していない
 コードの「実行結果」を捏造する。** 根拠の正しさを売りにする本アプリでは絶対に許容できない。
+
+### 実測
+
+モック Ollama で、実際に送信された `options` を観測した結果:
+
+```python
+get_llm("qwen3:14b", source="Ollama", stop_sequences=[...], base_url=...)
+  → options = {'temperature': 0.7}                       # stop も num_ctx も無い
+
+build_chat_ollama(settings, stop=AGENT_STOP_SEQUENCES)
+  → options = {'temperature': 0.7, 'num_ctx': 32768,
+               'num_predict': 4096, 'stop': ['</execute>', '</solution>']}
+```
+
+また `A1(...)` 構築直後の `agent.llm` は `stop=None, num_ctx=None, base_url=None` である。
+この 3 つが埋まっていることが、本アプリの前提条件になる。
 
 ### 対策: A1 構築後に LLM を差し替える
 
@@ -63,8 +95,11 @@ LLM の生出力に `<observation>` が含まれていないことをアサー�
 ## 4.2 `base_url` が Ollama に渡らない
 
 `get_llm()` の Ollama 分岐は `base_url` 引数を無視する。`A1(base_url=...)` を指定しても効かない。
-Ollama を別ホスト／別ポートで動かす場合は、§4.1 の差し替えで `base_url` を明示するか、
-`OLLAMA_HOST` 環境変数を設定する。Docker Compose 構成では `http://ollama:11434` になる。
+実測でも `get_llm(..., base_url="http://127.0.0.1:xxxxx")` の戻り値は `llm.base_url is None` で、
+**`OLLAMA_HOST` 環境変数を設定しない限り向き先を変えられない**。
+
+§4.1 の差し替えで `base_url` を明示すればこの問題は消える。
+Docker Compose 構成では `http://ollama:11434` になる。
 
 ## 4.3 DB クエリツールが既定 LLM（Anthropic）を呼びに行く
 
@@ -118,15 +153,30 @@ S3 から取得しようとする**（さらに benchmark ディレクトリも�
 さらに応答は `TOOLS: [1, 5, 9]` 形式のテキストを正規表現で拾う実装のため、
 指示追従の弱いモデルでは全カテゴリ空になり、その場合エージェントは何のツールも案内されずに走る。
 
+### さらに深刻: リソース検索を切っても**システムプロンプト自体が巨大**
+
+`use_tool_retriever=False` にしても、`configure()` が作るシステムプロンプトには
+全ツールの説明・データレイク一覧・ライブラリ一覧が載る。実測値（biomni 0.0.8, `commercial_mode=True`）:
+
+| モジュール構成 | ツール数 | プロンプト | ≒トークン | num_ctx=32768 の占有 |
+| --- | ---: | ---: | ---: | ---: |
+| 絞り込みなし (21) | 214 | 154,296 文字 | 38.6k | **118%（溢れる）** |
+| `EXTENDED` (11) | 144 | 107,391 文字 | 26.8k | 82% |
+| `DEFAULT` (5) | 75 | 66,008 文字 | 16.5k | 50% |
+| `CORE` (3) | 47 | 38,115 文字 | 9.5k | 29% |
+
+**絞り込まないと、システムプロンプトだけで `num_ctx=32768` を超える。**
+会話が 1 往復も入らないので、エージェントは何もできない。
+
 ### 対策（優先順）
 
-1. `num_ctx` を 32768 以上にする（`qwen3:14b` や `gpt-oss:20b` なら現実的）
-2. **モジュール単位で事前に絞る**: `agent.module2api` から本アプリで使うモジュール
-   （`literature`, `database`, `genomics`, `genetics`, `pharmacology`, `systems_biology`, `support_tools` など）
-   だけを残してから `ToolRegistry` を作り直す。これだけでプロンプトが 1/3 以下になる
-3. 検索結果が全カテゴリ空だった場合に**既定リソースセットへフォールバック**する（現状は無言で空のまま進む）
-4. それでも不安定なら `use_tool_retriever=False` + 固定リソースセットで運用する。
-   v1 の既定はこれ（**確実に動く構成から始める**）
+1. **モジュール単位で事前に絞る**（`agent_factory.py` のプリセット）。
+   既定は `DEFAULT_TOOL_MODULES`（5 モジュール / 75 ツール / 約 16.5k トークン）。
+   `AgentBundle.context_utilization` が 0.4 を超えたら警告を出す
+2. `num_ctx` を上げる。`EXTENDED` を使うなら 65536 以上が要る
+3. `use_tool_retriever=False` + 固定リソースセットで運用する。v1 の既定はこれ
+4. リソース検索を有効にする場合、結果が全カテゴリ空だったら**既定リソースセットへフォールバック**する
+   （現状は無言で空のまま進む）
 
 ## 4.6 `get_llm(config=...)` の属性名不一致
 
@@ -174,10 +224,46 @@ S3 から取得しようとする**（さらに benchmark ディレクトリも�
 }
 ```
 
+### モジュールプリセットと num_ctx の組み合わせ
+
+| プリセット | 推奨 num_ctx | 会話に使える余白 |
+| --- | ---: | ---: |
+| `CORE` (3 モジュール) | 32768 | 約 23k トークン |
+| `DEFAULT` (5 モジュール) | 32768 | 約 16k トークン |
+| `EXTENDED` (11 モジュール) | 65536 | 約 38k トークン |
+
+`num_ctx` を上げると KV キャッシュのメモリが増える。CPU 推論では速度にも効くので、
+まず `CORE` で動かして、必要になったら広げるのが安全。
+
 `recursion_limit` は A1 内で 500 固定。ローカル LLM だとループに嵌まると数時間走るため、
 **ワーカー側でステップ数の上限とラン全体のウォールクロック上限を別途設ける**（既定 60 ステップ / 30 分）。
 
-## 4.9 将来の差し替え
+## 4.9 モック Ollama による検証（実機なしで配線を確かめる）
+
+`biomni_hypo/mock_ollama.py` は Ollama の HTTP API（`/api/chat`, `/api/tags`, `/api/show`）を
+最小限だけ実装したテスト用サーバ。応答を台本で与えられるので、**実機が無くても
+「設定が実際にリクエストへ乗るか」と「A1 の ReAct ループが回るか」を確かめられる**。
+
+```python
+with MockOllama(replies=["<execute>\nprint(1)\n</execute>", "<solution>結論</solution>"]) as mock:
+    settings.ollama_base_url = mock.base_url
+    bundle = build_agent(settings, policy, tool_modules=CORE_TOOL_MODULES)
+    result = TracingRunner(bundle).run("質問")
+    assert mock.last_options()["stop"] == AGENT_STOP_SEQUENCES
+```
+
+`tests/test_integration_biomni.py` がこれを使って、実物の biomni に対して次を固定している。
+
+- `build_chat_ollama()` が stop / num_ctx を送ること
+- `biomni.llm.get_llm()` が **送らない**こと（直ったらテストが落ちて気付ける）
+- 拒否ツールがシステムプロンプトから消えること
+- 本物の `run_python_repl` に届く前にポリシーガードが割り込むこと
+- `run_hypothesis()` が最後まで通ること
+
+**検証できないのはモデルの挙動そのもの**（指示に従うか、コードを書けるか）。
+それは実機で `notebooks/01` と `notebooks/04` を回して見る。
+
+## 4.10 将来の差し替え
 
 `ChatOllama` を組み立てている箇所は `agent_factory.py` の 1 関数に閉じる。
 vLLM / SGLang（OpenAI 互換）に移す場合は `source="Custom"` + `base_url` で置き換えられる。

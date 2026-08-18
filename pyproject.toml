@@ -20,6 +20,9 @@ agent = [
     "biomni>=0.0.8",
     "langchain-ollama>=0.2",
     "langchain-core>=0.3",
+    # biomni 0.0.8 の pyproject が宣言していない実依存（A1 の import に必要）
+    "pandas>=2.0",
+    "langchain-openai>=0.2",
 ]
 api = [
     "fastapi>=0.110",
@@ -38,6 +41,9 @@ include = ["biomni_hypo*", "backend*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# `pytest` の console script は cwd を sys.path に入れない（`python -m pytest` は入れる）。
+# これが無いと `pytest -q` だけ ModuleNotFoundError で落ちる。
+pythonpath = ["."]
 filterwarnings = ["ignore::DeprecationWarning"]
 
 [tool.ruff]

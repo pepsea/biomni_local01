@@ -24,15 +24,33 @@ from biomni_hypo.policy import ResourcePolicy
 
 log = logging.getLogger(__name__)
 
-#: 仮説構築で実際に使うモジュールだけを残す（§4.5）。
-#: 全モジュールを載せるとリソース検索プロンプトが数万トークンになり、
-#: ローカルモデルの context を静かに溢れさせる。
-DEFAULT_TOOL_MODULES = (
+# --- ツールモジュールのプリセット（§4.5） -------------------------------------
+#
+# biomni 0.0.8 で実測したシステムプロンプトのサイズ（commercial_mode=True）:
+#
+#   絞り込みなし (21 モジュール / 214 ツール) : 154,296 文字 ≒ 38.6k トークン
+#   EXTENDED     (11 モジュール / 144 ツール) : 107,391 文字 ≒ 26.8k トークン
+#   DEFAULT      ( 5 モジュール /  75 ツール) :  66,008 文字 ≒ 16.5k トークン
+#   CORE         ( 3 モジュール /  47 ツール) :  38,115 文字 ≒  9.5k トークン
+#
+# 絞り込まないと **システムプロンプトだけで num_ctx=32768 を超える**。
+# 会話が 1 往復も入らないので、既定は DEFAULT にしてある。
+
+#: 文献検索と公共 DB だけ。動作確認や、軽いモデルで回すとき用
+CORE_TOOL_MODULES = (
     "biomni.tool.support_tools",
     "biomni.tool.literature",
     "biomni.tool.database",
+)
+
+#: 既定。仮説構築に効くゲノム・遺伝の解析を足して、なお num_ctx の半分に収まる
+DEFAULT_TOOL_MODULES = CORE_TOOL_MODULES + (
     "biomni.tool.genomics",
     "biomni.tool.genetics",
+)
+
+#: 広く使いたい場合。num_ctx を 65536 以上にしてから使うこと
+EXTENDED_TOOL_MODULES = DEFAULT_TOOL_MODULES + (
     "biomni.tool.molecular_biology",
     "biomni.tool.cell_biology",
     "biomni.tool.cancer_biology",
@@ -40,6 +58,12 @@ DEFAULT_TOOL_MODULES = (
     "biomni.tool.systems_biology",
     "biomni.tool.immunology",
 )
+
+#: 英数主体のプロンプトのトークン数のざっくり換算（1 トークン ≒ 4 文字）
+CHARS_PER_TOKEN = 4
+
+#: システムプロンプトが num_ctx のこの割合を超えたら警告する
+CONTEXT_WARN_RATIO = 0.4
 
 
 @dataclass
@@ -56,6 +80,20 @@ class AgentBundle:
     kept_modules: list[str] = field(default_factory=list)
     tool_count: int = 0
     biomni_version: str = ""
+    system_prompt_chars: int = 0
+
+    @property
+    def estimated_prompt_tokens(self) -> int:
+        return self.system_prompt_chars // CHARS_PER_TOKEN
+
+    @property
+    def context_utilization(self) -> float:
+        """システムプロンプトが num_ctx に占める割合。
+
+        これが 1.0 を超えると会話が 1 往復も入らない。0.4 を超えたら
+        モジュールを減らすか num_ctx を上げること。
+        """
+        return self.estimated_prompt_tokens / max(1, self.settings.num_ctx)
 
     @property
     def report(self) -> str:
@@ -71,7 +109,14 @@ class AgentBundle:
             f"tools available  : {self.tool_count}",
             f"tools removed    : {', '.join(self.removed_tools) or '(なし)'}",
             f"modules kept     : {len(self.kept_modules)}",
+            f"system prompt    : {self.system_prompt_chars:,} 文字 "
+            f"(≒{self.estimated_prompt_tokens:,} トークン / num_ctx の {self.context_utilization:.0%})",
         ]
+        if self.context_utilization > CONTEXT_WARN_RATIO:
+            lines.append(
+                f"  ⚠️ システムプロンプトが context の {self.context_utilization:.0%} を占めています。"
+                "モジュールを減らすか num_ctx を上げてください。"
+            )
         return "\n".join(lines)
 
 
@@ -138,7 +183,16 @@ def build_agent(
         kept_modules=kept_modules,
         tool_count=tool_count,
         biomni_version=biomni_version,
+        system_prompt_chars=len(getattr(agent, "system_prompt", "") or ""),
     )
+    if bundle.context_utilization > CONTEXT_WARN_RATIO:
+        log.warning(
+            "システムプロンプトが num_ctx の %.0f%% を占めています "
+            "(%s トークン / num_ctx=%s)。モジュールを減らすか num_ctx を上げてください。",
+            bundle.context_utilization * 100,
+            bundle.estimated_prompt_tokens,
+            settings.num_ctx,
+        )
     log.info("agent built: %s tools, %s removed", tool_count, len(removed))
     return bundle
 
