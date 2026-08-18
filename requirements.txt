@@ -1,0 +1,18 @@
+# 最小構成（ノートブック 03 とテストはこれだけで動く）
+pydantic>=2.7
+pyyaml>=6.0
+requests>=2.31
+
+# API サーバ
+fastapi>=0.110
+uvicorn[standard]>=0.29
+
+# エージェント本体（Ollama 実行に必要）
+biomni>=0.0.8
+langchain-ollama>=0.2
+langchain-core>=0.3
+
+# 開発
+pytest>=8.0
+httpx>=0.27
+jupyterlab>=4.0

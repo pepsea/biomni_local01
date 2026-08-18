@@ -4,3 +4,7 @@ __pycache__/
 *.pyc
 .env
 node_modules/
+.venv/
+reports/
+*.sqlite3
+.ipynb_checkpoints/

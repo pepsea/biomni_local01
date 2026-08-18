@@ -1,0 +1,45 @@
+# LLM が生成した任意コードを実行するため、ワーカーはコンテナに隔離する
+# （docs/design/02-architecture.md §2.6）。
+services:
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  api:
+    build: .
+    command: uvicorn backend.app.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+      BIOMNI_PATH: /app/data
+      HYPO_WORKSPACE: /app/workspace
+      BIOMNI_SOURCE: Ollama
+      LLM_SOURCE: Ollama
+      BIOMNI_COMMERCIAL_MODE: "true"
+    volumes:
+      - ./data:/app/data
+      - ./workspace:/app/workspace
+      - ./config:/app/config:ro
+    depends_on:
+      ollama:
+        condition: service_healthy
+    # ワーカー子プロセスが LLM 生成コードを実行する。権限を絞る
+    user: "1000:1000"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 8g
+    pids_limit: 512
+
+volumes:
+  ollama-models:

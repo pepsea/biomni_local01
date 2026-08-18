@@ -1,0 +1,185 @@
+"""ラン 1 本を通す共通エントリポイント.
+
+ノートブック（notebooks/04_end_to_end.ipynb）と Web ワーカー
+（backend/app/worker.py）は、どちらもこの関数を呼ぶ。
+処理をここに集約しておけば、ノートブックで検証したものがそのまま本番になる。
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+import uuid
+from collections.abc import Callable, Iterable
+from datetime import UTC, datetime
+from typing import Any
+
+from biomni_hypo.agent_factory import AgentBundle, build_agent
+from biomni_hypo.config import Settings
+from biomni_hypo.extractor import HypothesisExtractor
+from biomni_hypo.policy import ResourcePolicy
+from biomni_hypo.schemas import (
+    Resource,
+    ResourceKind,
+    RunResult,
+    Step,
+    StepKind,
+)
+from biomni_hypo.tracing import TracingRunner
+from biomni_hypo.verifier import EvidenceVerifier
+
+log = logging.getLogger(__name__)
+
+EventFn = Callable[[str, dict[str, Any]], None]
+
+
+def run_hypothesis(
+    question: str,
+    *,
+    settings: Settings | None = None,
+    policy: ResourcePolicy | None = None,
+    bundle: AgentBundle | None = None,
+    extractor: HypothesisExtractor | None = None,
+    verifier: EvidenceVerifier | None = None,
+    on_event: EventFn | None = None,
+    run_id: str | None = None,
+) -> RunResult:
+    """研究課題 -> 検証済みの仮説と根拠.
+
+    Args:
+        bundle: 既存の A1 を使い回す場合に渡す（構築は重い）。
+        on_event: SSE 配信用のコールバック。ノートブックでは省略可。
+    """
+    settings = settings or (bundle.settings if bundle else Settings())
+    policy = policy or (bundle.policy if bundle else ResourcePolicy.load(settings.policy_path))
+    run_id = run_id or f"r_{uuid.uuid4().hex[:12]}"
+    t0 = time.monotonic()
+
+    def emit(kind: str, payload: dict[str, Any]) -> None:
+        if on_event:
+            on_event(kind, payload)
+
+    if bundle is None:
+        emit("phase", {"phase": "building_agent"})
+        bundle = build_agent(settings, policy)
+
+    result = RunResult(
+        id=run_id,
+        question=question,
+        config=settings.to_run_config(
+            policy_version=policy.version, biomni_version=bundle.biomni_version
+        ),
+    )
+
+    # --- 1. 探索フェーズ ------------------------------------------------------
+    emit("phase", {"phase": "exploring"})
+    runner = TracingRunner(bundle, run_id=run_id)
+    try:
+        for _step in runner.iter_steps(question, on_event=on_event):
+            pass
+    except Exception as exc:  # noqa: BLE001 - 途中結果を残すことを優先する
+        log.exception("探索フェーズで例外")
+        result.error = f"{type(exc).__name__}: {exc}"
+    trace = runner.result()
+    result.steps = trace.steps
+    result.solution_text = trace.solution_text
+    result.resources_considered = trace.resources_considered
+    if trace.stopped_reason:
+        result.extra["stopped_reason"] = trace.stopped_reason
+    if trace.hallucinated_observations:
+        # AC-1 違反。stop シーケンスが効いていない状態でのランは信用できない。
+        result.extra["hallucinated_observations"] = trace.hallucinated_observations
+        log.error(
+            "LLM が observation を自己生成しました（%s 回）。"
+            "docs/design/04 §4.1 の LLM 差し替えが効いているか確認してください。",
+            trace.hallucinated_observations,
+        )
+
+    # --- 2. 抽出フェーズ ------------------------------------------------------
+    emit("phase", {"phase": "extracting"})
+    extractor = extractor or HypothesisExtractor(settings)
+    extraction = extractor.extract(question, trace.steps, trace.solution_text)
+    if extraction.unknown_eids:
+        result.extra["unknown_eids"] = sorted(set(extraction.unknown_eids))
+    if extraction.parse_error:
+        result.extra["extraction_error"] = extraction.parse_error
+
+    # --- 3. 検証フェーズ ------------------------------------------------------
+    emit("phase", {"phase": "verifying"})
+    verifier = verifier or EvidenceVerifier(offline=settings.offline_mode)
+    supported, unsupported, report = verifier.verify_run(extraction.hypotheses, trace.steps)
+    result.hypotheses = supported
+    result.unsupported_ideas = unsupported
+    result.failed_citations = report.failed
+    result.verification = report.summary
+    emit("verification", report.summary.model_dump(mode="json"))
+
+    # --- 4. 使用リソースの集計 ------------------------------------------------
+    result.resources_used = collect_resources(trace.steps, policy)
+
+    result.status = "failed" if (result.error and not result.steps) else "succeeded"
+    result.finished_at = datetime.now(UTC)
+    result.extra["duration_sec"] = round(time.monotonic() - t0, 1)
+    emit("done", {"status": result.status, "duration_sec": result.extra["duration_sec"]})
+    return result
+
+
+def collect_resources(steps: Iterable[Step], policy: ResourcePolicy) -> list[Resource]:
+    """トレースが実際に触れたリソースを、ライセンス情報付きで集計する（3 段階の B）。
+
+    レポートの「使用データとライセンス」セクションの元になる（docs/design/05 §5.3）。
+    """
+    datasets: dict[str, list[int]] = {}
+    tools: dict[str, tuple[str, list[int]]] = {}
+    user_files: dict[str, list[int]] = {}
+
+    for s in steps:
+        if s.kind != StepKind.EXECUTE:
+            continue
+        for name in s.datasets:
+            datasets.setdefault(name, []).append(s.idx)
+        for name in s.user_files:
+            user_files.setdefault(name, []).append(s.idx)
+        for t in s.tools:
+            entry = tools.setdefault(t.name, (t.module, []))
+            entry[1].append(s.idx)
+
+    out: list[Resource] = [policy.describe_dataset(n, idxs) for n, idxs in sorted(datasets.items())]
+
+    for name, (module, idxs) in sorted(tools.items()):
+        d = policy.check_tool(name)
+        out.append(
+            Resource(
+                kind=ResourceKind.TOOL,
+                name=name,
+                identifier=module,
+                license=d.license,
+                attribution=module,
+                commercial_ok=d.allowed,
+                review_required=d.review_required,
+                step_idxs=idxs,
+            )
+        )
+
+    for name, idxs in sorted(user_files.items()):
+        out.append(
+            Resource(
+                kind=ResourceKind.USER_FILE,
+                name=name,
+                license="user-provided",
+                commercial_ok=True,
+                step_idxs=idxs,
+            )
+        )
+    return out
+
+
+def summarize(result: RunResult) -> str:
+    """ノートブックで 1 行確認するための要約。"""
+    v = result.verification
+    return (
+        f"[{result.status}] {len(result.steps)} ステップ / "
+        f"仮説 {len(result.hypotheses)} 件（未裏付け {len(result.unsupported_ideas)} 件）/ "
+        f"根拠 検証済 {v.verified} · 検証不能 {v.not_applicable} · 失敗 {v.failed} "
+        f"（検証率 {v.rate:.0%}）"
+    )

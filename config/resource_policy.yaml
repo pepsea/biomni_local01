@@ -1,0 +1,136 @@
+# 商用利用限定のリソースポリシー（docs/design/05-commercial-licensing.md）
+#
+# 既定拒否。ここに書かれていないデータセットは使えない。
+# ライセンス欄は Biomni 同梱の license_info.md を出発点にしている。
+# 実運用前に法務レビューを行うこと（本ファイルはレビューの対象を絞るためのもの）。
+policy_version: 1
+mode: commercial_only
+
+datasets:
+  allow:
+    - name: gwas_catalog.pkl
+      license: Apache-2.0
+      attribution: EBI GWAS Catalog
+      url: https://www.ebi.ac.uk/gwas/
+    - name: gene_info.parquet
+      license: Public-Domain
+      attribution: NCBI Gene
+      url: https://www.ncbi.nlm.nih.gov/gene
+    - name: go-plus.json
+      license: CC-BY-4.0
+      attribution: Gene Ontology Consortium
+      url: http://geneontology.org/
+    - name: hp.obo
+      license: HPO-Free
+      attribution: Human Phenotype Ontology
+      url: https://hpo.jax.org/
+    - name: DepMap_CRISPRGeneEffect.csv
+      license: CC-BY-4.0
+      attribution: DepMap, Broad Institute
+      url: https://depmap.org/
+    - name: DepMap_CRISPRGeneDependency.csv
+      license: CC-BY-4.0
+      attribution: DepMap, Broad Institute
+    - name: DepMap_Model.csv
+      license: CC-BY-4.0
+      attribution: DepMap, Broad Institute
+    - name: DepMap_OmicsExpressionProteinCodingGenesTPMLogp1.csv
+      license: CC-BY-4.0
+      attribution: DepMap, Broad Institute
+    - name: broad_repurposing_hub_molecule_with_smiles.parquet
+      license: CC-BY-4.0
+      attribution: Broad Institute Drug Repurposing Hub
+    - name: broad_repurposing_hub_phase_moa_target_info.parquet
+      license: CC-BY-4.0
+      attribution: Broad Institute Drug Repurposing Hub
+    - name: genebass_pLoF_filtered.pkl
+      license: ODC-By-1.0
+      attribution: Genebass
+    - name: genebass_missense_LC_filtered.pkl
+      license: ODC-By-1.0
+      attribution: Genebass
+    - name: czi_census_datasets_v4.parquet
+      license: CC-BY-4.0
+      attribution: CZI CELLxGENE Census
+    - name: mousemine_mh_hallmark_geneset.parquet
+      license: CC-BY-4.0
+      attribution: MouseMine
+      note: MSigDB Hallmark の商用可な代替（マウス）
+    - name: mousemine_m5_ontology_geneset.parquet
+      license: CC-BY-4.0
+      attribution: MouseMine
+    - name: txgnn_prediction.pkl
+      license: MIT
+      attribution: TxGNN
+    - name: txgnn_name_mapping.pkl
+      license: MIT
+      attribution: TxGNN
+    - name: variant_table.parquet
+      license: Public-Domain
+      attribution: NCBI
+    - name: marker_celltype.parquet
+      license: CC-BY-4.0
+      attribution: Biomni data lake
+
+  # 取得はするが、UI とレポートで注意バッジを出す
+  review_required:
+    - name: proteinatlas.tsv
+      license: CC-BY-SA-3.0
+      attribution: Human Protein Atlas
+      note: ShareAlike（継承）条項あり。派生物の再配布形態を法務確認
+    - name: affinity_capture-ms.parquet
+      license: OSL-3.0
+      attribution: BioGRID
+      note: コピーレフト系。SaaS 提供時の扱いを要確認
+    - name: two-hybrid.parquet
+      license: OSL-3.0
+      attribution: BioGRID
+      note: コピーレフト系
+    - name: gtex_tissue_gene_tpm.parquet
+      license: GTEx-Terms
+      attribution: GTEx Consortium
+      note: 集計値のみ利用。個票は dbGaP 管理アクセス
+
+  deny_reason_default: "商用利用の許可リストに無いデータセット"
+
+tools:
+  # Biomni の commercial_mode はツールを絞らないため、ここで塞ぐ
+  deny:
+    - name: query_kegg
+      reason: KEGG は学術利用のみ無償。商用は要ライセンス契約
+    - name: query_scholar
+      reason: Google Scholar のスクレイピングは ToS 違反の懸念
+    - name: search_google
+      reason: 同上。必要なら正規の Search API 契約に置換
+    - name: advanced_web_search_claude
+      reason: 外部 LLM API（Anthropic）を呼ぶ。ローカル完結の前提に反する
+  review_required:
+    - name: query_cbioportal
+      reason: 収載元データセットごとにライセンスが異なる
+    - name: query_synapse
+      reason: データセットごとに利用条件が異なる
+  allow: "*"
+
+libraries:
+  deny:
+    - PyLabRobot
+    - nnunet
+
+models:
+  allow_licenses: [Apache-2.0, MIT, BSD-3-Clause]
+  allow:
+    - name: qwen3:14b
+      license: Apache-2.0
+    - name: qwen3:32b
+      license: Apache-2.0
+    - name: qwen3:8b
+      license: Apache-2.0
+    - name: gpt-oss:20b
+      license: Apache-2.0
+    - name: qwen2.5-coder:14b
+      license: Apache-2.0
+    - name: qwen2.5-coder:7b
+      license: Apache-2.0
+    - name: deepseek-r1:14b
+      license: MIT
+  deny_reason_default: "Llama Community License / Gemma 利用規約 などの追加条項があるモデルは既定で不可"
