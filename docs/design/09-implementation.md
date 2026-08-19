@@ -22,6 +22,7 @@ backend/app/ ──────>│   ここにロジックを集約する      
 | モジュール | 責務 | 対応する設計 |
 | --- | --- | --- |
 | `schemas.py` | ドメインモデル（Run / Step / Hypothesis / Evidence / Resource） | 03 §3.1 |
+| `question.py` | 調べたいことの入力・検査・プロンプト組み立て | 10 |
 | `config.py` | 設定と、**biomni の環境変数を import 前に適用する** `apply_biomni_env()` | 04 §4.3 |
 | `policy.py` | 商用限定のリソースポリシー。既定拒否 | 05 §5.2 |
 | `llm.py` | `ChatOllama` の構築（stop / num_ctx / base_url）と疎通確認 | 04 §4.1, §4.2 |
@@ -66,6 +67,7 @@ backend/app/ ──────>│   ここにロジックを集約する      
 | `backend/app/main.py` | FastAPI。HTTP と SSE の層に徹し、ドメインロジックを持たない |
 | `backend/app/worker.py` | ラン 1 本ごとに子プロセスを起こし `run_hypothesis()` を呼ぶ |
 | `backend/app/store.py` | sqlite3 に RunResult の JSON とイベントを保存 |
+| `backend/app/static/index.html` | 入力用の最小 UI（依存なしの 1 ファイル） |
 
 ### 設計との差分（意図的なもの）
 
@@ -73,7 +75,7 @@ backend/app/ ──────>│   ここにロジックを集約する      
 | --- | --- | --- |
 | SQLModel + SQLite | 標準ライブラリ `sqlite3` + JSON カラム | 依存を増やさない。スキーマが固まったら移行する |
 | ウォームプールの常駐ワーカー | ラン 1 本ごとの子プロセス | 隔離と状態リセットが確実。A1 構築コストは次の課題 |
-| React フロントエンド | 未実装 | API と SSE が先。UI 設計は 07 |
+| React フロントエンド | 依存なしの 1 ファイル UI | 入力の導線がないと使えないので暫定版を同梱。本設計は 07 |
 
 子プロセス方式にしているのは、`run_python_repl` が **LLM の生成コードをサンドボックスなしで
 `exec` する**ため（02 §2.6）。API サーバと同じプロセスで走らせない。
@@ -94,6 +96,7 @@ pytest -q     # 96 件
 | `test_pipeline.py` | エンドツーエンド。抽出失敗でランを落とさないこと。レポート内容 |
 | `test_api.py` | ポリシー違反モデルの拒否。SSE の再送 |
 | `test_models.py` | ファミリー単位のライセンス判定。使えないモデルを理由付きで返すこと |
+| `test_question.py` | プロンプト組み立て。入力検査。商用モードの除外領域の事前警告 |
 | `test_notebooks.py` | ノートブックの構文。出力を含めないこと。ロジックを書かないこと |
 | `test_integration_biomni.py` | **実物の biomni** に対する検証。biomni 未インストールならスキップ |
 
@@ -153,8 +156,9 @@ biomni_hypo.build_agent ┘        ├─ policy.check_model()  ファミリー�
 
 ## 9.8 次の実装ステップ
 
-1. **React フロントエンド**（07 の画面設計）。API と SSE は既にある
-2. **ユーザーデータのアップロード**（`POST /api/uploads` → `agent.add_data()`）
+1. **React フロントエンド**（07 の画面設計）。API・SSE・暫定 UI は既にある
+2. **ユーザーデータのアップロード**（`POST /api/uploads` → `agent.add_data()`）。
+   `data_interpretation` モードはこれが入るまで実質使えない
 3. **A1 のウォームプール**。ラン開始のレイテンシが構築コストに支配されている
 4. **評価セット**（08 §8.3）。答えが既知の質問 20 件を固定し、モデル変更のたびに回す
 5. **ライセンススキャン**を CI に追加（`pip-licenses` で GPL / AGPL / 非商用を検出）

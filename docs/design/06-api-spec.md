@@ -17,18 +17,31 @@
 | GET | `/datasets` | データレイクの状態（取得済み / 未取得 / ライセンス） |
 | POST | `/datasets/fetch` | 許可リスト内データセットの取得 |
 | POST | `/uploads` | ユーザーデータ（CSV/TSV）アップロード |
+| GET | `/question/templates` | 入力テンプレートとモード一覧 |
+| POST | `/question/preview` | 実行せずにプロンプトと入力指摘だけ返す |
 | GET | `/policy` | 適用中のリソースポリシーの要約 |
 | GET | `/health` | Ollama 接続・ワーカー状態・キュー長 |
 
 ## 6.2 ラン開始
+
+調べたいことは構造化して渡す（`docs/design/10-question-input.md`）。
+文字列 1 本の `question` でも受け付ける（後方互換）。
 
 ```http
 POST /api/runs
 Content-Type: application/json
 
 {
-  "question": "トリプルネガティブ乳がんで PARP 阻害剤耐性を規定する因子の候補は？",
-  "mode": "hypothesis",            // hypothesis | evidence_check | data_interpretation
+  "input": {
+    "text": "PARP 阻害剤耐性を規定する因子の候補は？",
+    "mode": "hypothesis",          // hypothesis | evidence_check | data_interpretation
+    "organism": "ヒト",
+    "context": "トリプルネガティブ乳がん、オラパリブ投与下",
+    "focus": ["BRCA1", "BRCA2", "相同組換え修復"],
+    "background": "BRCA 変異型では奏効するが、非変異型で耐性例が報告されている",
+    "dataset_ids": [],
+    "max_hypotheses": 5
+  },
   "model": "qwen3:14b",
   "options": {
     "temperature": 0.7,
@@ -38,9 +51,32 @@ Content-Type: application/json
     "max_steps": 60,
     "wallclock_limit_sec": 1800,
     "timeout_seconds": 600,
-    "max_hypotheses": 5,
-    "dataset_ids": ["upload_a1b2c3"]     // 任意。agent.add_data() で組み込む
+    "max_hypotheses": 5
   }
+}
+```
+
+入力に不備があれば、**モデル解決より前に** 422 で止める。
+
+```jsonc
+422
+{"error": "invalid_question",
+ "detail": "データ解釈モードでは、解析するデータの指定が必要です。",
+ "hints": [{"severity":"error","field":"dataset_ids","message":"..."}]}
+```
+
+### `POST /api/question/preview`
+
+実行せずに、組み立てたプロンプトと入力の指摘だけを返す。
+
+```jsonc
+{
+  "summary": "PARP 阻害剤耐性を規定する因子の候補は？（トリプルネガティブ乳がん…）",
+  "prompt": "Research question:\n...",
+  "prompt_language": "en",
+  "hints": [{"severity":"info","field":"commercial_mode",
+             "message":"遺伝子セット解析: MSigDB が商用モードで使えません。代替: GO…"}],
+  "can_run": true
 }
 ```
 

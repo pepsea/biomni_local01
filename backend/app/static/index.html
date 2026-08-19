@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Biomni 仮説構築</title>
+<style>
+  :root {
+    --bg: #fbfbfa; --fg: #1c1b1a; --muted: #6b6a67; --line: #e3e2df;
+    --card: #ffffff; --accent: #3a5a9b; --warn: #8a6d1f; --err: #a03535; --ok: #2f6b45;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #1a1a19; --fg: #eceae6; --muted: #9a9894; --line: #33322f;
+            --card: #232220; --accent: #8aa9de; --warn: #d3b45f; --err: #e08a8a; --ok: #7fc79b; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.6 system-ui, "Hiragino Sans", "Noto Sans JP", sans-serif; }
+  header { border-bottom: 1px solid var(--line); padding: 14px 20px; display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap; }
+  header h1 { font-size: 16px; margin: 0; font-weight: 650; }
+  header .meta { color: var(--muted); font-size: 13px; }
+  main { display: grid; grid-template-columns: minmax(360px, 460px) 1fr; gap: 0; min-height: calc(100vh - 52px); }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .panel { padding: 20px; }
+  .panel.left { border-right: 1px solid var(--line); }
+  label { display: block; font-size: 13px; font-weight: 600; margin: 14px 0 4px; }
+  label .opt { font-weight: 400; color: var(--muted); }
+  input[type=text], textarea, select {
+    width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px;
+    background: var(--card); color: var(--fg); font: inherit;
+  }
+  textarea { resize: vertical; min-height: 80px; }
+  .hintline { font-size: 12px; color: var(--muted); margin-top: 3px; }
+  .modes { display: flex; gap: 6px; flex-wrap: wrap; }
+  .modes button {
+    flex: 1 1 auto; padding: 8px 6px; border: 1px solid var(--line); border-radius: 6px;
+    background: var(--card); color: var(--fg); cursor: pointer; font: inherit; font-size: 13px;
+  }
+  .modes button[aria-pressed=true] { border-color: var(--accent); color: var(--accent); font-weight: 650; }
+  .row { display: flex; gap: 8px; }
+  .row > * { flex: 1; }
+  details { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 10px; }
+  summary { cursor: pointer; font-size: 13px; font-weight: 600; }
+  .actions { display: flex; gap: 8px; margin-top: 18px; }
+  button.primary { background: var(--accent); color: #fff; border: none; padding: 10px 16px; border-radius: 6px; cursor: pointer; font: inherit; font-weight: 600; }
+  button.ghost { background: transparent; color: var(--fg); border: 1px solid var(--line); padding: 10px 14px; border-radius: 6px; cursor: pointer; font: inherit; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .msg { padding: 8px 10px; border-radius: 6px; font-size: 13px; margin: 8px 0; border: 1px solid var(--line); }
+  .msg.error { color: var(--err); border-color: var(--err); }
+  .msg.warning { color: var(--warn); border-color: var(--warn); }
+  .msg.info { color: var(--muted); }
+  pre { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 10px;
+        overflow-x: auto; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; }
+  .step { border-left: 2px solid var(--line); padding: 4px 0 4px 12px; margin: 0 0 2px; font-size: 13px; }
+  .step .k { font-family: var(--mono); font-size: 11px; color: var(--muted); text-transform: uppercase; }
+  .step.execute { border-left-color: var(--accent); }
+  .step.observation { border-left-color: var(--ok); }
+  .step.policy_blocked { border-left-color: var(--err); }
+  .step.solution { border-left-color: var(--warn); }
+  .hyp { border: 1px solid var(--line); border-radius: 8px; padding: 14px; margin-bottom: 12px; background: var(--card); }
+  .hyp h3 { margin: 0 0 6px; font-size: 15px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+  .chip { font-size: 12px; border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px; }
+  .chip.verified { border-color: var(--ok); color: var(--ok); }
+  .chip.failed { border-color: var(--err); color: var(--err); }
+  .empty { color: var(--muted); font-size: 14px; }
+  option:disabled { color: var(--muted); }
+  h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 22px 0 8px; }
+  h2:first-child { margin-top: 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Biomni 仮説構築</h1>
+  <span class="meta" id="meta">読み込み中…</span>
+</header>
+
+<main>
+  <section class="panel left">
+    <h2>調べたいこと</h2>
+
+    <label>モード</label>
+    <div class="modes" id="modes"></div>
+    <div class="hintline" id="modeDesc"></div>
+
+    <label for="template">例から始める <span class="opt">任意</span></label>
+    <select id="template"><option value="">（空から書く）</option></select>
+
+    <label for="text">課題 <span class="opt">必須</span></label>
+    <textarea id="text" placeholder="例) トリプルネガティブ乳がんで PARP 阻害剤耐性を規定する因子の候補は？"></textarea>
+    <div class="hintline">知りたい「関係」を書くと精度が上がります（X が Y にどう影響するか、など）</div>
+
+    <div class="row">
+      <div>
+        <label for="organism">生物種</label>
+        <input type="text" id="organism" placeholder="ヒト">
+      </div>
+      <div>
+        <label for="maxHyp">仮説の上限</label>
+        <input type="text" id="maxHyp" value="5">
+      </div>
+    </div>
+
+    <label for="context">対象 <span class="opt">疾患・組織・細胞株・条件</span></label>
+    <input type="text" id="context" placeholder="トリプルネガティブ乳がん、オラパリブ投与下">
+
+    <label for="focus">注目する遺伝子・経路・薬剤 <span class="opt">カンマ区切り</span></label>
+    <input type="text" id="focus" placeholder="BRCA1, BRCA2, 相同組換え修復">
+
+    <label for="background">既に分かっていること <span class="opt">任意</span></label>
+    <textarea id="background" placeholder="BRCA 変異型では奏効するが、非変異型で耐性例が報告されている"></textarea>
+
+    <details>
+      <summary>実行設定</summary>
+      <label for="model">モデル</label>
+      <select id="model"></select>
+      <div class="hintline" id="modelNote"></div>
+
+      <div class="row">
+        <div><label for="maxSteps">最大ステップ</label><input type="text" id="maxSteps" value="60"></div>
+        <div><label for="numCtx">num_ctx</label><input type="text" id="numCtx" placeholder="自動"></div>
+      </div>
+
+      <label style="font-weight:400;margin-top:12px">
+        <input type="checkbox" id="offline"> オフラインモード（外部 DB を使わず、質問を一切外部に送らない）
+      </label>
+    </details>
+
+    <div id="hints"></div>
+
+    <div class="actions">
+      <button class="primary" id="run">仮説を構築する</button>
+      <button class="ghost" id="preview">プロンプトを確認</button>
+      <button class="ghost" id="cancel" style="display:none">停止</button>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div id="output"><p class="empty">左で課題を入力して「仮説を構築する」を押してください。<br>
+      実行前に「プロンプトを確認」でエージェントに渡す内容を見られます。</p></div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let MODES = [], TEMPLATES = [], currentMode = "hypothesis", runId = null, es = null;
+
+function collect() {
+  return {
+    text: $("text").value.trim(),
+    mode: currentMode,
+    organism: $("organism").value.trim(),
+    context: $("context").value.trim(),
+    focus: $("focus").value.split(/[,、\/\n]+/).map(s => s.trim()).filter(Boolean),
+    background: $("background").value.trim(),
+    exclude: [],
+    dataset_ids: [],
+    max_hypotheses: parseInt($("maxHyp").value, 10) || 5,
+  };
+}
+
+function renderHints(hints) {
+  $("hints").innerHTML = (hints || []).map(h =>
+    `<div class="msg ${h.severity}">${h.severity === "error" ? "❌" : h.severity === "warning" ? "⚠️" : "ℹ️"} ${esc(h.message)}</div>`
+  ).join("");
+}
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(JSON.stringify(body.detail ?? body));
+  return body;
+}
+
+async function boot() {
+  const [health, models, templates] = await Promise.all([
+    api("/api/health"), api("/api/models"), api("/api/question/templates"),
+  ]);
+
+  $("meta").textContent =
+    `商用モード · policy v${health.policy_version} · ` +
+    (health.ollama.reachable ? `Ollama 接続済み` : `⚠️ Ollama 未接続 (${health.ollama.base_url})`);
+
+  MODES = templates.modes;
+  $("modes").innerHTML = MODES.map(m =>
+    `<button data-mode="${m.id}" aria-pressed="${m.id === currentMode}">${esc(m.label)}</button>`).join("");
+  $("modes").onclick = (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    currentMode = b.dataset.mode;
+    [...$("modes").children].forEach(x => x.setAttribute("aria-pressed", x.dataset.mode === currentMode));
+    $("modeDesc").textContent = (MODES.find(m => m.id === currentMode) || {}).description || "";
+  };
+  $("modeDesc").textContent = (MODES.find(m => m.id === currentMode) || {}).description || "";
+
+  TEMPLATES = templates.templates;
+  $("template").innerHTML = `<option value="">（空から書く）</option>` +
+    TEMPLATES.map(t => `<option value="${t.id}">${esc(t.label)}</option>`).join("");
+  $("template").onchange = () => {
+    const t = TEMPLATES.find(x => x.id === $("template").value);
+    if (!t) return;
+    $("text").value = t.text; $("organism").value = t.organism;
+    $("context").value = t.context; $("focus").value = (t.focus || []).join(", ");
+    $("background").value = t.background;
+    currentMode = t.mode;
+    [...$("modes").children].forEach(x => x.setAttribute("aria-pressed", x.dataset.mode === currentMode));
+    $("modeDesc").textContent = (MODES.find(m => m.id === currentMode) || {}).description || "";
+  };
+
+  // モデル: ローカルにあるものだけを選択肢にし、使えないものは理由付きで無効表示
+  $("model").innerHTML = models.models.map(m => {
+    const label = m.installed
+      ? `${m.recommended ? "★ " : ""}${m.name}${m.size_gb ? ` · ${m.size_gb}GB` : ""}${m.max_context ? ` · ctx ${m.max_context.toLocaleString()}` : ""}${m.allowed ? "" : ` — ${m.license}`}`
+      : `${m.name} — 未取得 (ollama pull ${m.name})`;
+    const usable = m.installed && m.allowed;
+    return `<option value="${esc(m.name)}" ${usable ? "" : "disabled"} ${m.name === models.default ? "selected" : ""}>${esc(label)}</option>`;
+  }).join("");
+  const blocked = models.models.filter(m => m.installed && !m.allowed);
+  $("modelNote").textContent = blocked.length
+    ? `${blocked.length} 件が商用利用ポリシーで使えません: ` + blocked.map(m => `${m.name}（${m.license}）`).join(", ")
+    : "";
+}
+
+$("preview").onclick = async () => {
+  try {
+    const r = await api("/api/question/preview",
+      { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(collect()) });
+    renderHints(r.hints);
+    $("output").innerHTML =
+      `<h2>エージェントに渡すプロンプト <span style="text-transform:none;font-weight:400">(${r.prompt_language})</span></h2>
+       <pre>${esc(r.prompt)}</pre>`;
+  } catch (e) { renderHints([{ severity: "error", message: e.message }]); }
+};
+
+$("run").onclick = async () => {
+  const opts = { max_steps: parseInt($("maxSteps").value, 10) || 60, offline_mode: $("offline").checked };
+  const ctx = parseInt($("numCtx").value, 10); if (ctx) opts.num_ctx = ctx;
+  try {
+    const r = await api("/api/runs", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ input: collect(), model: $("model").value, options: opts }),
+    });
+    renderHints(r.hints);
+    runId = r.run_id;
+    $("run").disabled = true; $("cancel").style.display = "";
+    $("output").innerHTML =
+      `<h2>実行中 — ${esc(r.model)} · num_ctx ${r.num_ctx.toLocaleString()}</h2>
+       ${(r.notes || []).map(n => `<div class="msg warning">⚠️ ${esc(n)}</div>`).join("")}
+       <div id="trace"></div><div id="result"></div>`;
+    listen(r.run_id);
+  } catch (e) { renderHints([{ severity: "error", message: e.message }]); }
+};
+
+$("cancel").onclick = async () => {
+  if (runId) await fetch(`/api/runs/${runId}/cancel`, { method: "POST" });
+  finish();
+};
+
+function finish() {
+  if (es) { es.close(); es = null; }
+  $("run").disabled = false; $("cancel").style.display = "none";
+}
+
+function listen(id) {
+  es = new EventSource(`/api/runs/${id}/events`);
+  const trace = () => $("trace");
+  es.addEventListener("step", (ev) => {
+    const s = JSON.parse(ev.data);
+    const head = (s.code || s.text || "").split("\n").find(Boolean) || "";
+    const el = document.createElement("div");
+    el.className = `step ${s.kind}`;
+    el.innerHTML = `<span class="k">${s.idx} ${s.kind}</span> ${esc(head.slice(0, 160))}`;
+    trace().appendChild(el);
+    el.scrollIntoView({ block: "nearest" });
+  });
+  es.addEventListener("phase", (ev) => {
+    const el = document.createElement("div");
+    el.className = "step"; el.innerHTML = `<span class="k">${esc(JSON.parse(ev.data).phase)}</span>`;
+    trace().appendChild(el);
+  });
+  es.addEventListener("done", async () => { await showResult(id); finish(); });
+  es.onerror = () => finish();
+}
+
+async function showResult(id) {
+  const r = await api(`/api/runs/${id}`);
+  const v = r.verification || {};
+  const hyps = (r.hypotheses || []).map((h, i) => `
+    <div class="hyp">
+      <h3>仮説 ${i + 1}. ${esc(h.statement)}</h3>
+      <div class="hintline">確度 ${esc(h.confidence)} · 新規性 ${esc(h.novelty)} · 根拠 ${h.evidence.length} 件</div>
+      <p>${esc(h.rationale)}</p>
+      <div class="chips">${h.evidence.map(e =>
+        `<span class="chip ${e.verification_status}" title="${esc(e.excerpt)}">${esc(e.identifier)} · ${esc(e.stance)} · ステップ ${e.step_idx}</span>`).join("")}</div>
+      ${h.test_plan && h.test_plan.experiment ? `<div class="hintline">検証: ${esc(h.test_plan.experiment)} / ${esc(h.test_plan.readout)}</div>` : ""}
+    </div>`).join("");
+
+  $("result").innerHTML = `
+    <h2>仮説</h2>
+    ${hyps || '<p class="empty">裏付けのある仮説は得られませんでした。</p>'}
+    ${(r.unsupported_ideas || []).length ? `<h2>未裏付けの着想</h2><ul>${r.unsupported_ideas.map(h => `<li>${esc(h.statement)}</li>`).join("")}</ul>` : ""}
+    <h2>根拠の検証</h2>
+    <p>検証済 ${v.verified} / 検証不能 ${v.not_applicable} / 失敗 ${v.failed}</p>
+    ${(r.failed_citations || []).length ? `<ul>${r.failed_citations.map(f => `<li>${esc(f.identifier)}: ${esc(f.reason)}</li>`).join("")}</ul>` : ""}
+    <h2>使用データとライセンス</h2>
+    <ul>${(r.resources_used || []).map(x => `<li>${esc(x.name)} — ${esc(x.license)}${x.review_required ? " ⚠️ 要確認" : ""}</li>`).join("")}</ul>
+    <p><a href="/api/runs/${id}/report" target="_blank">Markdown レポート</a></p>`;
+}
+
+boot().catch(e => { $("meta").textContent = "起動に失敗: " + e.message; });
+</script>
+</body>
+</html>

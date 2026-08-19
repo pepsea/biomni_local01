@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from backend.app.store import RunStore
@@ -23,6 +23,13 @@ from biomni_hypo.config import Settings
 from biomni_hypo.llm import ollama_status
 from biomni_hypo.models import ModelNotAvailable, apply_model_selection, list_local_models
 from biomni_hypo.policy import ResourcePolicy
+from biomni_hypo.question import (
+    MODE_DESCRIPTIONS,
+    MODE_LABELS,
+    TEMPLATES,
+    QuestionMode,
+    ResearchQuestion,
+)
 from biomni_hypo.report import to_markdown
 from biomni_hypo.schemas import RunResult
 from biomni_hypo.version import __version__
@@ -30,6 +37,18 @@ from biomni_hypo.version import __version__
 log = logging.getLogger(__name__)
 
 app = FastAPI(title="Biomni Hypothesis Builder", version=__version__)
+
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+
+@app.get("/", include_in_schema=False)
+async def index() -> FileResponse:
+    """入力用の最小 UI（依存なしの 1 ファイル）。
+
+    docs/design/07 の本設計は React を想定しているが、まず「調べたいことを入力して
+    走らせる」導線がないと使えないので、ビルド不要の 1 枚を同梱する。
+    """
+    return FileResponse(STATIC_DIR / "index.html")
 
 SETTINGS = Settings()
 POLICY = ResourcePolicy.load(SETTINGS.policy_path)
@@ -56,13 +75,39 @@ class RunOptions(BaseModel):
     max_hypotheses: int | None = None
 
 
+class QuestionInput(BaseModel):
+    """調べたいことの入力。`text` 以外は任意だが、埋めるほど探索が安定する。"""
+
+    text: str = Field(min_length=1, description="調べたいこと")
+    mode: QuestionMode = QuestionMode.HYPOTHESIS
+    organism: str = ""
+    context: str = ""
+    focus: list[str] = Field(default_factory=list)
+    background: str = ""
+    exclude: list[str] = Field(default_factory=list)
+    dataset_ids: list[str] = Field(default_factory=list)
+    max_hypotheses: int = Field(default=5, ge=1, le=20)
+
+    def to_question(self) -> ResearchQuestion:
+        return ResearchQuestion(**self.model_dump())
+
+
 class RunRequest(BaseModel):
-    question: str = Field(min_length=1)
+    #: 構造化入力。`question`（文字列）だけでも受け付ける
+    input: QuestionInput | None = None
+    question: str | None = Field(default=None, min_length=1)
     #: 省略時は設定のモデル。使えなければローカルから既定を選ぶ
     model: str | None = None
     #: 仮説抽出だけ別モデルにしたい場合
     extractor_model: str | None = None
     options: RunOptions = Field(default_factory=RunOptions)
+
+    def to_question(self) -> ResearchQuestion:
+        if self.input is not None:
+            return self.input.to_question()
+        if self.question:
+            return ResearchQuestion.from_text(self.question)
+        raise ValueError("input か question のどちらかが必要です")
 
 
 def _catalog(refresh: bool = False):
@@ -177,10 +222,56 @@ async def models(refresh: bool = False) -> dict[str, Any]:
     }
 
 
+@app.get("/api/question/templates")
+async def question_templates() -> dict[str, Any]:
+    """入力欄の初期値。UI の「例から始める」に使う。"""
+    return {
+        "modes": [
+            {"id": m.value, "label": MODE_LABELS[m], "description": MODE_DESCRIPTIONS[m]}
+            for m in QuestionMode
+        ],
+        "templates": [t.as_dict() for t in TEMPLATES],
+    }
+
+
+@app.post("/api/question/preview")
+async def question_preview(payload: QuestionInput) -> dict[str, Any]:
+    """実行せずに、組み立てたプロンプトと入力の指摘だけを返す。
+
+    何を投げるか分からないまま結果だけ出てくる、という状態を作らないための入口。
+    """
+    question = payload.to_question()
+    hints = question.hints(commercial_mode=SETTINGS.commercial_mode)
+    return {
+        "summary": question.summary,
+        "prompt": question.to_prompt(SETTINGS.prompt_language),
+        "prompt_language": SETTINGS.prompt_language,
+        "hints": [h.as_dict() for h in hints],
+        "can_run": not any(h.severity == "error" for h in hints),
+    }
+
+
 @app.post("/api/runs", status_code=202)
 async def create_run(req: RunRequest) -> dict[str, Any]:
     if _running:
         raise HTTPException(409, {"error": "queue_full", "running": list(_running)})
+
+    try:
+        question = req.to_question()
+    except ValueError as exc:
+        raise HTTPException(422, {"error": "invalid_question", "detail": str(exc)}) from exc
+
+    hints = question.hints(commercial_mode=SETTINGS.commercial_mode)
+    blocking = [h for h in hints if h.severity == "error"]
+    if blocking:
+        raise HTTPException(
+            422,
+            {
+                "error": "invalid_question",
+                "detail": " / ".join(h.message for h in blocking),
+                "hints": [h.as_dict() for h in hints],
+            },
+        )
 
     settings = SETTINGS.model_copy(deep=True)
     for field, value in req.options.model_dump(exclude_none=True).items():
@@ -206,13 +297,16 @@ async def create_run(req: RunRequest) -> dict[str, Any]:
     run_id = f"r_{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
     run = RunResult(
         id=run_id,
-        question=req.question,
+        question=question.summary,
+        question_spec=question.as_spec(),
+        prompt=question.to_prompt(settings.prompt_language),
         status="running",
         config=settings.to_run_config(policy_version=POLICY.version),
     )
+    run.extra["input_hints"] = [h.as_dict() for h in hints]
     STORE.save(run)
 
-    proc, mp_queue = spawn(run_id, req.question, settings.model_dump())
+    proc, mp_queue = spawn(run_id, question.as_spec(), settings.model_dump())
     _running[run_id] = proc
     asyncio.create_task(_drain(run_id, proc, mp_queue))
     await _publish(run_id, "status", {"status": "running", "model": settings.model, "notes": notes})
@@ -222,6 +316,7 @@ async def create_run(req: RunRequest) -> dict[str, Any]:
         "model": settings.model,
         "num_ctx": settings.num_ctx,
         "notes": notes,
+        "hints": [h.as_dict() for h in hints],
     }
 
 

@@ -70,3 +70,62 @@ def test_notebooks_import_the_shared_package_not_reimplement_it():
                 stripped = line.strip()
                 if stripped.startswith(("def ", "class ")) and stripped not in allowed:
                     raise AssertionError(f"{path.name}: ノートブックに定義があります -> {stripped}")
+
+
+def _bound_names(tree: ast.AST) -> set[str]:
+    """そのセルで新しく定義される名前（代入・import・def/class・with as・for）。"""
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            names.add(node.id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+            names.update(a.arg for a in node.args.args + node.args.kwonlyargs)
+            if node.args.vararg:
+                names.add(node.args.vararg.arg)
+            if node.args.kwarg:
+                names.add(node.args.kwarg.arg)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                names.add(alias.asname or alias.name.split(".")[0])
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            names.add(node.name)
+        elif isinstance(node, (ast.Lambda,)):
+            names.update(a.arg for a in node.args.args + node.args.kwonlyargs)
+    return names
+
+
+def _loaded_names(tree: ast.AST) -> set[str]:
+    return {n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+
+
+@pytest.mark.parametrize("path", NOTEBOOKS, ids=lambda p: p.name)
+def test_cells_do_not_use_names_defined_only_later(path):
+    """セルの並び順が依存関係と合っているか。
+
+    上から順に実行して NameError にならないことを静的に確認する。
+    「後のセルでしか定義されない名前を、前のセルが使っている」だけを見るので、
+    外部由来の名前を誤検出しない。
+    """
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    code_cells = [
+        (i, ast.parse("".join(c["source"])))
+        for i, c in enumerate(doc["cells"])
+        if c["cell_type"] == "code"
+    ]
+
+    bound_per_cell = [(i, _bound_names(tree)) for i, tree in code_cells]
+
+    for pos, (idx, tree) in enumerate(code_cells):
+        defined_before: set[str] = set()
+        for _j, names in bound_per_cell[: pos + 1]:
+            defined_before |= names
+        defined_later: set[str] = set()
+        for _j, names in bound_per_cell[pos + 1 :]:
+            defined_later |= names
+
+        used_too_early = (_loaded_names(tree) - defined_before) & defined_later
+        assert not used_too_early, (
+            f"{path.name} セル {idx}: {sorted(used_too_early)} が後のセルでしか定義されていません。"
+            " セルの順序を依存関係に合わせてください。"
+        )

@@ -18,6 +18,7 @@ from biomni_hypo.agent_factory import AgentBundle, build_agent
 from biomni_hypo.config import Settings
 from biomni_hypo.extractor import HypothesisExtractor
 from biomni_hypo.policy import ResourcePolicy
+from biomni_hypo.question import ResearchQuestion, coerce_question
 from biomni_hypo.schemas import (
     Resource,
     ResourceKind,
@@ -34,7 +35,7 @@ EventFn = Callable[[str, dict[str, Any]], None]
 
 
 def run_hypothesis(
-    question: str,
+    question: ResearchQuestion | str,
     *,
     settings: Settings | None = None,
     policy: ResourcePolicy | None = None,
@@ -47,13 +48,25 @@ def run_hypothesis(
     """研究課題 -> 検証済みの仮説と根拠.
 
     Args:
+        question: ResearchQuestion（推奨）か、自由記述の文字列。
         bundle: 既存の A1 を使い回す場合に渡す（構築は重い）。
         on_event: SSE 配信用のコールバック。ノートブックでは省略可。
+
+    Raises:
+        ValueError: 入力に error レベルの Hint がある場合（実行前に止める）。
     """
     settings = settings or (bundle.settings if bundle else Settings())
     policy = policy or (bundle.policy if bundle else ResourcePolicy.load(settings.policy_path))
     run_id = run_id or f"r_{uuid.uuid4().hex[:12]}"
     t0 = time.monotonic()
+
+    spec = coerce_question(question)
+    blocking = spec.blocking_hints
+    if blocking:
+        raise ValueError("入力に問題があります: " + " / ".join(h.message for h in blocking))
+    if spec.max_hypotheses != settings.max_hypotheses:
+        settings = settings.model_copy(update={"max_hypotheses": spec.max_hypotheses})
+    prompt = spec.to_prompt(settings.prompt_language)
 
     def emit(kind: str, payload: dict[str, Any]) -> None:
         if on_event:
@@ -65,17 +78,23 @@ def run_hypothesis(
 
     result = RunResult(
         id=run_id,
-        question=question,
+        question=spec.summary,
+        question_spec=spec.as_spec(),
+        prompt=prompt,
         config=settings.to_run_config(
             policy_version=policy.version, biomni_version=bundle.biomni_version
         ),
     )
+    hints = [h.as_dict() for h in spec.hints(commercial_mode=settings.commercial_mode)]
+    if hints:
+        result.extra["input_hints"] = hints
+        emit("input_hints", {"hints": hints})
 
     # --- 1. 探索フェーズ ------------------------------------------------------
     emit("phase", {"phase": "exploring"})
     runner = TracingRunner(bundle, run_id=run_id)
     try:
-        for _step in runner.iter_steps(question, on_event=on_event):
+        for _step in runner.iter_steps(prompt, on_event=on_event):
             pass
     except Exception as exc:  # noqa: BLE001 - 途中結果を残すことを優先する
         log.exception("探索フェーズで例外")
@@ -98,7 +117,8 @@ def run_hypothesis(
     # --- 2. 抽出フェーズ ------------------------------------------------------
     emit("phase", {"phase": "extracting"})
     extractor = extractor or HypothesisExtractor(settings)
-    extraction = extractor.extract(question, trace.steps, trace.solution_text)
+    # 抽出は「元の問い」を見せる。組み立て済みプロンプトより人の意図に近い
+    extraction = extractor.extract(spec.summary, trace.steps, trace.solution_text)
     if extraction.unknown_eids:
         result.extra["unknown_eids"] = sorted(set(extraction.unknown_eids))
     if extraction.parse_error:

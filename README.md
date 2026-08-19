@@ -16,9 +16,10 @@
 | コアパッケージ (`biomni_hypo/`) | ✅ 実装済み |
 | 検証ノートブック (`notebooks/`) | ✅ 5 本 |
 | API + SSE (`backend/`) | ✅ 実装済み・実サーバで動作確認 |
-| テスト | ✅ **144 件**（うち 12 件は実物の biomni に対する統合テスト） |
+| テスト | ✅ **188 件**（うち 12 件は実物の biomni に対する統合テスト） |
 | モデル選択 | ✅ ローカルの Ollama を読み込んで選択（ライセンス判定つき） |
-| React フロントエンド | ⬜ 未着手（設計は [07](docs/design/07-ui-design.md)） |
+| 質問入力 | ✅ 構造化入力・テンプレート・入力検査・プロンプト確認 |
+| Web UI | ✅ 依存なしの 1 ファイル（`/`）。React 版は未着手（設計は [07](docs/design/07-ui-design.md)） |
 
 **検証済み**: biomni 0.0.8 を実際にインストールし、モック Ollama サーバを相手に
 A1 の構築・ReAct ループ・ポリシーガード・パイプライン全体が動くことを確認した。
@@ -115,6 +116,30 @@ jupyter lab notebooks/
 make api            # uvicorn backend.app.main:app --port 8000
 ```
 
+ブラウザで **http://localhost:8000** を開くと入力画面が出ます。
+
+```
+モード  ● 仮説生成   ○ 根拠検証   ○ データ解釈
+例から始める  [治療抵抗性の機序を探す ▾]
+
+課題   [トリプルネガティブ乳がんで PARP 阻害剤耐性を規定する因子は？]
+生物種 [ヒト]   対象 [TNBC、オラパリブ投与下]
+注目   [BRCA1, BRCA2, 相同組換え修復]
+
+           [ 仮説を構築する ]  [ プロンプトを確認 ]
+```
+
+`text` 以外は任意ですが、埋めるほど探索が安定します。埋まっていない項目は指摘が出ます。
+**「プロンプトを確認」で、エージェントに何を投げるかを実行前に見られます。**
+
+ターミナルから使う場合:
+
+```bash
+python scripts/ask.py                                    # 対話入力
+python scripts/ask.py "TNBC の PARP 阻害剤耐性は？" --organism ヒト
+python scripts/ask.py --template resistance --dry-run    # プロンプトだけ確認
+```
+
 ```bash
 curl -s localhost:8000/api/models                   # ローカルのモデル一覧
 curl -X POST localhost:8000/api/runs -H 'content-type: application/json' \
@@ -129,12 +154,13 @@ Docker なら `docker compose up`（ollama + api）。
 
 ```
 biomni_hypo/     共有コアパッケージ ← ノートブックも Web アプリもここを呼ぶ
+  question.py    調べたいことの入力・検査・プロンプト組み立て
   models.py      ローカルモデルの探索・ライセンス判定・選択
 notebooks/       検証ハーネス（ロジックは書かない。テストで強制）
-backend/app/     FastAPI + SSE + ラン実行ワーカー（子プロセス）
+backend/app/     FastAPI + SSE + ラン実行ワーカー（子プロセス）+ 最小 UI
 config/          resource_policy.yaml（商用限定・既定拒否）
-scripts/         データセット取得・モデル一覧・ローカルセットアップ
-tests/           144 件。うち 132 件は外部サービス不要
+scripts/         質問の実行(ask)・モデル一覧・データセット取得・セットアップ
+tests/           188 件。うち 176 件は外部サービス不要
 docs/design/     設計書
 ```
 
@@ -151,6 +177,7 @@ docs/design/     設計書
 | [07-ui-design](docs/design/07-ui-design.md) | 画面設計 |
 | [08-roadmap](docs/design/08-roadmap.md) | フェーズ計画・受け入れ基準・リスク |
 | [09-implementation](docs/design/09-implementation.md) | 実装の構成（ノートブックと Web アプリの関係） |
+| [10-question-input](docs/design/10-question-input.md) | **調べたいことの入力**（構造化・検査・プロンプト組み立て） |
 
 ## 設計の要点
 

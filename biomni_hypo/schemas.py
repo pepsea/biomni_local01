@@ -207,7 +207,12 @@ class RunResult(BaseModel):
     """1 ランの全出力。API レスポンスとレポートの共通ソース。"""
 
     id: str
+    #: 人が読む形の課題（ResearchQuestion.summary）
     question: str
+    #: 構造化された入力（ResearchQuestion.as_spec()）
+    question_spec: dict[str, Any] = Field(default_factory=dict)
+    #: エージェントに実際に渡したプロンプト。何を投げたかを必ず残す
+    prompt: str = ""
     status: Literal["running", "succeeded", "failed", "cancelled"] = "running"
     config: RunConfig = Field(default_factory=RunConfig)
     resources_considered: dict[str, list[str]] = Field(default_factory=dict)

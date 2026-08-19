@@ -40,6 +40,7 @@ _KIND_LABEL = {
 def to_markdown(result: RunResult, *, include_trace: bool = True) -> str:
     parts = [
         _header(result),
+        _question_section(result),
         _hypotheses_section(result),
         _unsupported_section(result),
         _verification_section(result),
@@ -80,6 +81,46 @@ def _header(r: RunResult) -> str:
     if review:
         names = ", ".join(x.name for x in review)
         lines += ["", f"> ⚠️ ライセンスの確認が必要なリソースを使用しています: {names}"]
+    return "\n".join(lines)
+
+
+_SPEC_LABELS = {
+    "mode": "モード",
+    "organism": "生物種",
+    "context": "対象",
+    "focus": "注目対象",
+    "background": "前提",
+    "exclude": "除外",
+    "dataset_ids": "使用データ",
+}
+
+
+def _question_section(r: RunResult) -> str:
+    """何を聞いたか、実際に何を投げたかを残す。
+
+    プロンプトを隠すと、結果を検証できる人がいなくなる。
+    """
+    spec = r.question_spec or {}
+    lines = ["## 入力", "", f"**{r.question}**", ""]
+
+    rows = []
+    for key, label in _SPEC_LABELS.items():
+        value = spec.get(key)
+        if not value:
+            continue
+        text = ", ".join(value) if isinstance(value, list) else str(value)
+        rows.append(f"| {label} | {text} |")
+    if rows:
+        lines += ["| 項目 | 内容 |", "| --- | --- |", *rows, ""]
+
+    for hint in r.extra.get("input_hints", []):
+        mark = {"error": "❌", "warning": "⚠️", "info": "ℹ️"}.get(hint.get("severity"), "・")
+        lines.append(f"{mark} {hint.get('message')}")
+    if r.extra.get("input_hints"):
+        lines.append("")
+
+    if r.prompt:
+        lines += ["<details><summary>エージェントに渡したプロンプト</summary>", "", "```", r.prompt, "```", "", "</details>"]
     return "\n".join(lines)
 
 

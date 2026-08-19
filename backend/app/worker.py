@@ -50,12 +50,12 @@ def run_in_subprocess(
         queue.put({"run_id": run_id, "kind": "_eof", "payload": {}})
 
 
-def spawn(run_id: str, question: str, settings_dict: dict[str, Any]) -> tuple[Any, Any]:
+def spawn(run_id: str, question_spec: dict[str, Any], settings_dict: dict[str, Any]) -> tuple[Any, Any]:
     ctx = mp.get_context("spawn")
     queue: Any = ctx.Queue()
     proc = ctx.Process(
         target=run_in_subprocess,
-        args=(run_id, question, settings_dict, queue),
+        args=(run_id, question_spec, settings_dict, queue),
         daemon=True,
         name=f"hypo-run-{run_id}",
     )

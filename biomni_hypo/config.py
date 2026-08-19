@@ -50,6 +50,10 @@ class Settings(BaseModel):
         default_factory=lambda: int(_env("HYPO_WALLCLOCK_LIMIT_SEC", "1800"))
     )
     max_hypotheses: int = Field(default_factory=lambda: int(_env("HYPO_MAX_HYPOTHESES", "5")))
+    #: エージェントへの指示文の言語。"en" | "ja"
+    #: A1 のシステムプロンプトもツール説明も英語なので、既定は en のほうが追従が安定する。
+    #: ユーザーの記述自体は翻訳せずそのまま埋め込む。
+    prompt_language: str = Field(default_factory=lambda: _env("HYPO_PROMPT_LANGUAGE", "en"))
     use_tool_retriever: bool = Field(
         default_factory=lambda: _env("HYPO_USE_TOOL_RETRIEVER", "false").lower() == "true"
     )
