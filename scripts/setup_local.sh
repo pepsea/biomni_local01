@@ -47,6 +47,19 @@ else
   echo "  ※ biomni と Ollama を使うには --full を付けて再実行してください"
 fi
 
+say "依存チェック"
+python - <<'PYCHECK'
+import sys
+sys.path.insert(0, ".")
+from biomni_hypo.config import AGENT_DEPENDENCIES, install_hint, missing_dependencies
+
+missing = missing_dependencies()
+for d in AGENT_DEPENDENCIES:
+    print(("  \033[32m✓\033[0m" if d.installed else "  \033[33m·\033[0m"), f"{d.module:20s} {d.why}")
+if missing:
+    print("\n  エージェントを動かすには:", install_hint(missing))
+PYCHECK
+
 say "設定ファイル"
 if [[ -f .env ]]; then ok ".env（既存のものを使用）"; else cp .env.example .env; ok ".env を作成"; fi
 

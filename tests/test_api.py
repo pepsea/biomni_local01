@@ -250,3 +250,13 @@ def test_events_replay_from_store(client):
     assert "event: status" in text
     assert "event: done" in text
     assert "id: 2" in text
+
+
+def test_health_reports_dependency_status(client):
+    """依存が欠けていると子プロセスで初めて落ちる。health で先に見えること。"""
+    body = client.get("/api/health").json()
+    deps = body["dependencies"]
+    assert isinstance(deps["ok"], bool)
+    assert isinstance(deps["missing"], list)
+    if not deps["ok"]:
+        assert deps["install"].startswith("pip install")

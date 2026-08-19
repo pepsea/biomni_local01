@@ -16,7 +16,7 @@
 | コアパッケージ (`biomni_hypo/`) | ✅ 実装済み |
 | 検証ノートブック (`notebooks/`) | ✅ 5 本 |
 | API + SSE (`backend/`) | ✅ 実装済み・実サーバで動作確認 |
-| テスト | ✅ **188 件**（うち 12 件は実物の biomni に対する統合テスト） |
+| テスト | ✅ **195 件**（うち 12 件は実物の biomni に対する統合テスト） |
 | モデル選択 | ✅ ローカルの Ollama を読み込んで選択（ライセンス判定つき） |
 | 質問入力 | ✅ 構造化入力・テンプレート・入力検査・プロンプト確認 |
 | Web UI | ✅ 依存なしの 1 ファイル（`/`）。React 版は未着手（設計は [07](docs/design/07-ui-design.md)） |
@@ -56,9 +56,13 @@ cp .env.example .env
 pytest -q                       # 108 passed
 ```
 
-> `pip install biomni` だけでは `from biomni.agent import A1` が落ちる。
-> biomni 0.0.8 は `pandas` と `langchain-openai` を依存として宣言していないため。
-> `requirements.txt` で明示的に入れている。
+> **`pip install biomni` だけでは動かない。** biomni 0.0.8 の `pyproject.toml` は
+> `pydantic` / `langchain` / `python-dotenv` しか宣言しておらず、`pandas` と
+> `langchain-openai` が無いと `from biomni.agent import A1` が落ちる。
+> Ollama を使うには `langchain-ollama` も要る。`requirements.txt` で全部入れている。
+>
+> 何が足りないかは `notebooks/00`、`GET /api/health`、`bash scripts/setup_local.sh` の
+> いずれでも確認できる（`pip install ...` のコマンドまで出る）。
 
 **3. Ollama とデータセット**
 

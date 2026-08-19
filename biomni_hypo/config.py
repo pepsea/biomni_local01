@@ -8,7 +8,9 @@ biomni.config.default_config はモジュール読み込み時に環境変数を
 
 from __future__ import annotations
 
+import importlib.util
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -21,6 +23,57 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 def _env(name: str, default: str) -> str:
     v = os.getenv(name)
     return v if v not in (None, "") else default
+
+
+@dataclass(frozen=True)
+class Dependency:
+    """import 名と pip 名。両者はしばしば食い違う（langchain_ollama / langchain-ollama）。"""
+
+    module: str
+    package: str
+    why: str
+
+    @property
+    def installed(self) -> bool:
+        # find_spec はモジュールを実行しないので、重い biomni でも安全に調べられる
+        try:
+            return importlib.util.find_spec(self.module) is not None
+        except (ImportError, ValueError):
+            return False
+
+
+#: エージェントを動かすのに要るもの。
+#: biomni 0.0.8 の pyproject は pydantic / langchain / python-dotenv しか宣言しておらず、
+#: pandas と langchain-openai が無いと `from biomni.agent import A1` の時点で落ちる。
+AGENT_DEPENDENCIES: tuple[Dependency, ...] = (
+    Dependency("biomni", "biomni", "エージェント本体"),
+    Dependency("langchain_ollama", "langchain-ollama", "Ollama への接続（ChatOllama）"),
+    Dependency("langchain_core", "langchain-core", "メッセージ型"),
+    Dependency("langgraph", "langgraph", "A1 の実行グラフ"),
+    Dependency("pandas", "pandas", "biomni が宣言していない実依存"),
+    Dependency("langchain_openai", "langchain-openai", "biomni が宣言していない実依存"),
+    Dependency("dotenv", "python-dotenv", "biomni の .env 読み込み"),
+)
+
+#: API サーバを動かすのに要るもの
+API_DEPENDENCIES: tuple[Dependency, ...] = (
+    Dependency("fastapi", "fastapi", "API サーバ"),
+    Dependency("uvicorn", "uvicorn[standard]", "ASGI サーバ"),
+)
+
+
+def missing_dependencies(
+    group: tuple[Dependency, ...] = AGENT_DEPENDENCIES,
+) -> list[Dependency]:
+    """足りない依存を返す。空なら揃っている。"""
+    return [d for d in group if not d.installed]
+
+
+def install_hint(missing: list[Dependency]) -> str:
+    """不足分をまとめて入れるコマンド。"""
+    if not missing:
+        return ""
+    return "pip install " + " ".join(sorted({d.package for d in missing}))
 
 
 class Settings(BaseModel):

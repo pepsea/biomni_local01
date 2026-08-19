@@ -17,8 +17,21 @@ ModuleNotFoundError: No module named 'pandas'
 ModuleNotFoundError: No module named 'langchain_openai'
 ```
 
-本アプリの `requirements.txt` では `pandas` と `langchain-openai` を明示的にピン留めしている。
-`pip install biomni` だけでは A1 を import できない。
+さらに Ollama を使うには `langchain-ollama` が要る。これが無いと `biomni.llm.get_llm()` が
+`ImportError` を投げるが、**A1 の import 自体は通ってしまう**ため、環境チェックで
+`import biomni` だけを見ていると気付けない（notebook 01 で初めて落ちる）。
+
+本アプリの `requirements.txt` では `pandas` / `langchain-openai` / `langchain-ollama` を
+明示的にピン留めし、`biomni_hypo.config.missing_dependencies()` で不足を検出する。
+
+```python
+from biomni_hypo.config import install_hint, missing_dependencies
+
+missing = missing_dependencies()          # find_spec で調べる（重い import をしない）
+print(install_hint(missing))              # -> "pip install langchain-ollama pandas"
+```
+
+`notebooks/00`・`GET /api/health`・`scripts/setup_local.sh` がこれを使う。
 
 ## 4.1 致命的: Ollama 分岐で stop シーケンスが落ちる
 

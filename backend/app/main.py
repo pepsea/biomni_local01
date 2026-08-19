@@ -19,7 +19,12 @@ from pydantic import BaseModel, Field
 
 from backend.app.store import RunStore
 from backend.app.worker import spawn
-from biomni_hypo.config import Settings
+from biomni_hypo.config import (
+    AGENT_DEPENDENCIES,
+    Settings,
+    install_hint,
+    missing_dependencies,
+)
 from biomni_hypo.llm import ollama_status
 from biomni_hypo.models import ModelNotAvailable, apply_model_selection, list_local_models
 from biomni_hypo.policy import ResourcePolicy
@@ -172,9 +177,16 @@ async def health() -> dict[str, Any]:
     st = ollama_status(SETTINGS.ollama_base_url, timeout=3)
     catalog = _catalog()
     default = catalog.default(preferred=SETTINGS.model)
+    missing = missing_dependencies(AGENT_DEPENDENCIES)
     return {
         "api": "ok",
         "version": __version__,
+        # 依存が欠けていると、ラン開始まで気付かず子プロセスで落ちる。ここで見えるようにする
+        "dependencies": {
+            "ok": not missing,
+            "missing": [{"module": d.module, "package": d.package, "why": d.why} for d in missing],
+            "install": install_hint(missing),
+        },
         "ollama": {"reachable": st.reachable, "base_url": st.base_url, "models": st.models, "error": st.error},
         "models": {
             "configured": SETTINGS.model,
