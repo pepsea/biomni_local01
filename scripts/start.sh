@@ -2,13 +2,19 @@
 # Web アプリを起動する。起動前に環境を確認して、足りないものを具体的に指摘する。
 #
 #   bash scripts/start.sh                 # http://localhost:8000
-#   bash scripts/start.sh --port 9000
+#   bash scripts/start.sh --port 9000     # ポートを変える
+#                                         # （.env の APP_PORT でも指定できます）
 #   bash scripts/start.sh --check         # 確認だけして起動しない
 #   bash scripts/start.sh --reload        # コード変更を自動反映（開発用）
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-PORT=8000
+# .env の APP_PORT があればそれを既定にする（Docker 版と揃える）
+PORT="${APP_PORT:-8000}"
+if [[ -z "${APP_PORT:-}" && -f .env ]]; then
+  PORT=$(sed -n 's/^APP_PORT=//p' .env | head -1)
+  PORT="${PORT:-8000}"
+fi
 CHECK_ONLY=0
 RELOAD=""
 while [[ $# -gt 0 ]]; do
@@ -92,6 +98,14 @@ else:
     print("      ローカルで使う   :  ollama pull qwen3:14b")
     print("      Claude API を使う:  export ANTHROPIC_API_KEY=sk-ant-...")
 PYCHECK
+
+say "待ち受け"
+ok "http://localhost:$PORT"
+if command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | grep -qE "[:.]${PORT}\b"; then
+  warn "ポート $PORT は既に使われています。--port で別のポートを指定してください"
+elif command -v lsof >/dev/null 2>&1 && lsof -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+  warn "ポート $PORT は既に使われています。--port で別のポートを指定してください"
+fi
 
 if [[ $CHECK_ONLY -eq 1 ]]; then
   say "確認のみ（--check）"; exit 0

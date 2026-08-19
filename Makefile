@@ -69,11 +69,16 @@ check: lint test
 # restart: unless-stopped なので、明示的に down するまで動き続ける。
 # マシンを再起動しても Docker が上がればアプリも戻る。
 
+# ポートは .env の APP_PORT で変える（既定 8000）
+APP_PORT ?= $(shell sed -n 's/^APP_PORT=//p' .env 2>/dev/null | head -1)
+APP_PORT := $(if $(APP_PORT),$(APP_PORT),8000)
+
 docker-up:
 	mkdir -p data workspace
 	docker compose up -d --build
 	@echo ""
-	@echo "起動しました。http://localhost:8000"
+	@echo "起動しました。http://localhost:$(APP_PORT)"
+	@echo "ポートを変えるには .env に  APP_PORT=9000  を書いて make docker-rebuild"
 	@echo "初回はモデル取得に時間がかかります:  make docker-logs"
 
 docker-logs:

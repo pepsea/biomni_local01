@@ -1,6 +1,9 @@
 # 常駐させる構成。
 #
 #   docker compose up -d              起動（バックグラウンド）
+#
+# ポートを変えるには .env に:  APP_PORT=9000
+# 外部に出したくないなら:      APP_BIND=127.0.0.1
 #   docker compose logs -f app        ログを追う
 #   docker compose ps                 状態
 #   docker compose down               停止（モデルとデータは残る）
@@ -17,7 +20,8 @@ services:
     container_name: biomni-ollama
     restart: unless-stopped
     ports:
-      - "127.0.0.1:11434:11434"     # ホストからも使えるが外部には出さない
+      # 既定はループバックのみ。外部には出さない
+      - "${OLLAMA_BIND:-127.0.0.1}:${OLLAMA_PORT:-11434}:11434"
     volumes:
       - ollama-models:/root/.ollama
     healthcheck:
@@ -55,7 +59,9 @@ services:
     container_name: biomni-app
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      # ホスト側のポートは .env の APP_PORT で変えられる（コンテナ内は 8000 固定）。
+      # 外部に出したくないなら APP_BIND=127.0.0.1
+      - "${APP_BIND:-0.0.0.0}:${APP_PORT:-8000}:8000"
     environment:
       OLLAMA_BASE_URL: http://ollama:11434
       BIOMNI_PATH: /app/data

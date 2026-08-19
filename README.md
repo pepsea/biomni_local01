@@ -47,6 +47,9 @@ Docker + systemd で常設します。マシンを再起動しても自動で復
 | `make service-update` | `git pull` して入れ替え |
 | `make service-uninstall` | 取り外す（データは残る） |
 
+ポートを変えるには `.env` に `APP_PORT=9000` と書いて `make docker-rebuild`。
+外部に出したくないなら `APP_BIND=127.0.0.1` も足します。
+
 ### 手元で Docker だけ動かす
 
 Python の環境で悩みたくないならこれが確実です。イメージの中に Python は 1 つだけです。
@@ -172,7 +175,7 @@ make up                      # または: bash scripts/start.sh
 | `make up` | 起動（環境確認つき）。ふだんはこれ |
 | `make check-env` | 起動せず環境だけ確認（`scripts/start.sh --check`） |
 | `make doctor` | **どの Python を使っているか診断**（依存が入らないとき） |
-| `bash scripts/start.sh --port 9000` | ポートを変える |
+| `bash scripts/start.sh --port 9000` | ポートを変える（`.env` の `APP_PORT` でも可） |
 | `bash scripts/start.sh --reload` | コード変更を自動反映（開発用） |
 | `make docker-up` | **Docker で常駐起動**（Ollama ごと。[12](docs/design/12-docker.md)） |
 

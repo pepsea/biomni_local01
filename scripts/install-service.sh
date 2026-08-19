@@ -74,6 +74,9 @@ else
 fi
 MODEL=$(sed -n 's/^HYPO_MODEL=//p' .env | head -1)
 ok "使うモデル: ${MODEL:-qwen3:14b}"
+PORT=$(sed -n 's/^APP_PORT=//p' .env | head -1); PORT="${PORT:-8000}"
+BIND=$(sed -n 's/^APP_BIND=//p' .env | head -1); BIND="${BIND:-0.0.0.0}"
+ok "待ち受け: ${BIND}:${PORT}  （.env の APP_PORT / APP_BIND で変えられます）"
 
 say "データ用ディレクトリ"
 mkdir -p data workspace
@@ -130,7 +133,7 @@ fi
 
 say "できあがり"
 cat <<MSG
-  http://localhost:8000
+  http://localhost:${PORT}
 
   状態      : $CTL status $UNIT
   ログ      : $CTL -o cat -f -u $UNIT      （コンテナのログは docker compose logs -f app）
