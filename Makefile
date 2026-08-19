@@ -1,5 +1,6 @@
 .PHONY: help install install-min test lint notebook up api check-env doctor models fetch check \
-	docker-up docker-down docker-logs docker-ps docker-rebuild
+	docker-up docker-down docker-logs docker-ps docker-rebuild \
+	service-install service-status service-logs service-update service-uninstall
 
 help:
 	@echo "install      依存を全部入れる（biomni 含む・重い）"
@@ -21,6 +22,13 @@ help:
 	@echo "docker-ps      状態を見る"
 	@echo "docker-down    停止（モデルとデータは残る）"
 	@echo "docker-rebuild コード変更を反映して再起動"
+	@echo ""
+	@echo "-- Linux に常設（systemd）--"
+	@echo "service-install   常設する（Docker + systemd）"
+	@echo "service-status    状態"
+	@echo "service-logs      ログ"
+	@echo "service-update    git pull して入れ替え"
+	@echo "service-uninstall 取り外す（データは残る）"
 
 install:
 	pip install -r requirements.txt
@@ -79,3 +87,24 @@ docker-down:
 
 docker-rebuild:
 	docker compose up -d --build app
+
+# ---- Linux に常設（systemd + Docker）----------------------------------------
+# systemd が「起動と停止の入口」、コンテナの restart: unless-stopped が自己回復。
+
+service-install:
+	bash scripts/install-service.sh
+
+service-status:
+	systemctl status biomni-hypo.service --no-pager || true
+	@echo ""
+	docker compose ps
+
+service-logs:
+	docker compose logs -f app
+
+service-update:
+	git pull
+	sudo systemctl reload biomni-hypo.service
+
+service-uninstall:
+	bash scripts/uninstall-service.sh

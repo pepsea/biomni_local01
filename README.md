@@ -31,7 +31,23 @@ A1 の構築・ReAct ループ・ポリシーガード・パイプライン全�
 
 ## クイックスタート
 
-### いちばん簡単 — Docker で常駐させる
+### Linux に常設する（推奨）
+
+```bash
+make service-install
+```
+
+Docker + systemd で常設します。マシンを再起動しても自動で復帰し、
+`systemctl` から扱えます。詳細は [13-linux-deployment.md](docs/design/13-linux-deployment.md)。
+
+| コマンド | 用途 |
+| --- | --- |
+| `make service-status` | 状態 |
+| `make service-logs` | ログ |
+| `make service-update` | `git pull` して入れ替え |
+| `make service-uninstall` | 取り外す（データは残る） |
+
+### 手元で Docker だけ動かす
 
 Python の環境で悩みたくないならこれが確実です。イメージの中に Python は 1 つだけです。
 
@@ -258,6 +274,7 @@ docs/design/     設計書
 | [10-question-input](docs/design/10-question-input.md) | **調べたいことの入力**（構造化・検査・プロンプト組み立て） |
 | [11-realtime-and-providers](docs/design/11-realtime-and-providers.md) | **リアルタイム出力**とプロバイダ選択（Ollama / Claude API） |
 | [12-docker](docs/design/12-docker.md) | **Docker で常駐**させる |
+| [13-linux-deployment](docs/design/13-linux-deployment.md) | **Linux に常設**する（systemd） |
 
 ## 設計の要点
 

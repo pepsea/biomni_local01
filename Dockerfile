@@ -17,11 +17,19 @@ RUN python -m venv /opt/venv \
 
 FROM python:3.11-slim
 
+# ホストのユーザーと UID を合わせる。
+# ./data と ./workspace を bind マウントするので、ずれると書き込めない。
+# 既定は 1000（多くの Linux で最初のユーザー）。
+ARG APP_UID=1000
+ARG APP_GID=1000
+
 # curl は healthcheck 用
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --create-home --uid 1000 app
+    && groupadd --gid "${APP_GID}" app 2>/dev/null || true \
+    && useradd --create-home --uid "${APP_UID}" --gid "${APP_GID}" app 2>/dev/null \
+       || useradd --create-home --uid "${APP_UID}" app
 
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH" \

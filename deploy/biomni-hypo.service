@@ -1,0 +1,45 @@
+# Biomni 仮説構築アプリを Linux に常設するための systemd ユニット。
+#
+# 直接編集せず、scripts/install-service.sh から導入すること
+# （__WORKDIR__ / __USER__ / __DOCKER__ を実環境の値に置き換えて設置する）。
+#
+# 手で入れる場合:
+#   sudo cp deploy/biomni-hypo.service /etc/systemd/system/
+#   sudo sed -i "s#__WORKDIR__#$PWD#; s#__USER__#$USER#; s#__DOCKER__#$(command -v docker)#" \
+#        /etc/systemd/system/biomni-hypo.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now biomni-hypo
+
+[Unit]
+Description=Biomni 仮説構築アプリ (docker compose)
+Documentation=file://__WORKDIR__/docs/design/13-linux-deployment.md
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=__WORKDIR__
+User=__USER__
+Group=__USER__
+
+# 初回はイメージのビルドとモデル取得で時間がかかる
+TimeoutStartSec=1800
+TimeoutStopSec=120
+
+ExecStart=__DOCKER__ compose up -d --remove-orphans
+ExecStop=__DOCKER__ compose down
+ExecReload=__DOCKER__ compose up -d --build --remove-orphans
+
+# Restart= は書かない。Type=oneshot と Restart= の併用は systemd が拒否する
+# （"Restart= setting other than no ... isn't allowed for Type=oneshot"）。
+# 自己回復はコンテナ側の restart: unless-stopped が担う。
+# systemd はこのサービスの「起動と停止の入口」として振る舞う。
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=biomni-hypo
+
+[Install]
+WantedBy=multi-user.target
