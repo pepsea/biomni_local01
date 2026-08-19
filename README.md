@@ -119,8 +119,34 @@ jupyter lab notebooks/
 ### 4. Web アプリを起動する
 
 ```bash
-make api            # uvicorn backend.app.main:app --port 8000
+make up                      # または: bash scripts/start.sh
 ```
+
+起動前に環境を確認して、足りないものを具体的に指摘します。
+
+```
+== Python 環境
+  ✓ ./.venv を使います
+== 依存パッケージ
+  ✓ API サーバの依存 OK
+  ✓ エージェントの依存 OK
+== LLM
+  ✓ 使えるモデル 2 件: qwen3:14b, qwen3:8b
+      既定: qwen3:14b（ローカル）
+== 起動
+  ブラウザで  http://localhost:8000  を開いてください（停止は Ctrl-C）
+```
+
+| コマンド | 用途 |
+| --- | --- |
+| `make up` | 起動（環境確認つき）。ふだんはこれ |
+| `make check-env` | 起動せず環境だけ確認（`scripts/start.sh --check`） |
+| `bash scripts/start.sh --port 9000` | ポートを変える |
+| `bash scripts/start.sh --reload` | コード変更を自動反映（開発用） |
+| `docker compose up` | Ollama ごとコンテナで起動 |
+
+**Ollama も Claude API も無くてもサーバは起動します**（モデルが選べないだけ）。
+`make check-env` で何が足りないか分かります。
 
 ブラウザで **http://localhost:8000** を開きます。
 
