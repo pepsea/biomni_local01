@@ -141,12 +141,33 @@ make up                      # または: bash scripts/start.sh
 | --- | --- |
 | `make up` | 起動（環境確認つき）。ふだんはこれ |
 | `make check-env` | 起動せず環境だけ確認（`scripts/start.sh --check`） |
+| `make doctor` | **どの Python を使っているか診断**（依存が入らないとき） |
 | `bash scripts/start.sh --port 9000` | ポートを変える |
 | `bash scripts/start.sh --reload` | コード変更を自動反映（開発用） |
 | `docker compose up` | Ollama ごとコンテナで起動 |
 
 **Ollama も Claude API も無くてもサーバは起動します**（モデルが選べないだけ）。
 `make check-env` で何が足りないか分かります。
+
+### 「pip install したのに ModuleNotFoundError」
+
+インストール先の Python と実行している Python が違う、が原因のほぼ全てです。
+
+```bash
+make doctor
+```
+
+見つかった Python ごとに「何が入っているか」と「この Python に入れるコマンド」が出ます。
+
+```
+  /home/you/projects/jupyter/.venv/bin/python  (Python 3.12.3 / 仮想環境)
+      ✓ アプリ本体      3/3
+      · エージェント     5/7   足りない: pandas, tqdm
+      → この Python に入れるなら:
+        /home/you/projects/jupyter/.venv/bin/python -m pip install pandas tqdm
+```
+
+Jupyter のセルからなら `%pip install <パッケージ>` を使ってください（カーネルの Python に入ります）。
 
 ブラウザで **http://localhost:8000** を開きます。
 

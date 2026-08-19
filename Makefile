@@ -1,4 +1,4 @@
-.PHONY: help install install-min test lint notebook up api check-env models fetch check
+.PHONY: help install install-min test lint notebook up api check-env doctor models fetch check
 
 help:
 	@echo "install      依存を全部入れる（biomni 含む・重い）"
@@ -8,6 +8,7 @@ help:
 	@echo "notebook     JupyterLab を起動"
 	@echo "up           Web アプリを起動（環境確認つき）  ← いつもこれ"
 	@echo "check-env    起動せず環境だけ確認"
+	@echo "doctor       どの Python を使っているか診断（依存が入らないとき）"
 	@echo "api          uvicorn を直接起動（確認なし）"
 	@echo "models       ローカルの Ollama にあるモデルを一覧"
 	@echo "fetch        許可リストのデータセットを取得"
@@ -33,6 +34,9 @@ up:
 
 check-env:
 	bash scripts/start.sh --check
+
+doctor:
+	bash scripts/doctor.sh
 
 api:
 	uvicorn backend.app.main:app --reload --port 8000
