@@ -5,6 +5,7 @@
 """
 
 import ast
+import builtins
 import json
 from pathlib import Path
 
@@ -99,6 +100,25 @@ def _loaded_names(tree: ast.AST) -> set[str]:
     return {n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
 
 
+#: Jupyter が勝手に用意する名前。ノートブック内で定義されなくても正常
+_NOTEBOOK_GLOBALS = {"get_ipython", "display", "In", "Out", "exit", "quit"}
+_BUILTINS = set(dir(builtins))
+
+
+def _external_names(tree: ast.AST) -> set[str]:
+    """そのセルが外部から与えられることを期待している名前。"""
+    return _loaded_names(tree) - _BUILTINS - _NOTEBOOK_GLOBALS
+
+
+def _code_cells(path: Path) -> list[tuple[int, ast.AST]]:
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    return [
+        (i, ast.parse("".join(c["source"])))
+        for i, c in enumerate(doc["cells"])
+        if c["cell_type"] == "code"
+    ]
+
+
 @pytest.mark.parametrize("path", NOTEBOOKS, ids=lambda p: p.name)
 def test_cells_do_not_use_names_defined_only_later(path):
     """セルの並び順が依存関係と合っているか。
@@ -107,12 +127,7 @@ def test_cells_do_not_use_names_defined_only_later(path):
     「後のセルでしか定義されない名前を、前のセルが使っている」だけを見るので、
     外部由来の名前を誤検出しない。
     """
-    doc = json.loads(path.read_text(encoding="utf-8"))
-    code_cells = [
-        (i, ast.parse("".join(c["source"])))
-        for i, c in enumerate(doc["cells"])
-        if c["cell_type"] == "code"
-    ]
+    code_cells = _code_cells(path)
 
     bound_per_cell = [(i, _bound_names(tree)) for i, tree in code_cells]
 
@@ -124,8 +139,29 @@ def test_cells_do_not_use_names_defined_only_later(path):
         for _j, names in bound_per_cell[pos + 1 :]:
             defined_later |= names
 
-        used_too_early = (_loaded_names(tree) - defined_before) & defined_later
+        used_too_early = (_external_names(tree) - defined_before) & defined_later
         assert not used_too_early, (
             f"{path.name} セル {idx}: {sorted(used_too_early)} が後のセルでしか定義されていません。"
             " セルの順序を依存関係に合わせてください。"
+        )
+
+
+@pytest.mark.parametrize("path", NOTEBOOKS, ids=lambda p: p.name)
+def test_cells_do_not_use_undefined_names(path):
+    """ノートブック内のどこでも定義されていない名前を使っていないか。
+
+    import ごと差し替えてしまって NameError になる事故を捕まえる。
+    順序チェック（後のセルでしか定義されない名前）だけでは、
+    「一度も定義されていない」ケースをすり抜ける。
+    """
+    code_cells = _code_cells(path)
+    defined_anywhere: set[str] = set()
+    for _idx, tree in code_cells:
+        defined_anywhere |= _bound_names(tree)
+
+    for idx, tree in code_cells:
+        undefined = _external_names(tree) - defined_anywhere
+        assert not undefined, (
+            f"{path.name} セル {idx}: {sorted(undefined)} がどこでも定義されていません。"
+            " import が抜けていないか確認してください。"
         )
