@@ -218,3 +218,46 @@ models:
       license: MIT
 
   deny_reason_default: "ライセンス未確認のモデルです。config/resource_policy.yaml の models に追加してください"
+
+# クラウド API のモデル。商用利用は各社の利用規約に従う（重みのライセンスとは別問題）。
+# ★ ローカル完結の前提が崩れる: 質問文・実行結果・取得データが外部へ送信される。
+#   UI とレポートで必ず明示すること。オフラインモードとは併用できない。
+providers:
+  ollama:
+    label: Ollama（ローカル）
+    local: true
+    note: 質問文もデータもローカルから出ない
+  anthropic:
+    label: Claude API
+    local: false
+    requires_env: ANTHROPIC_API_KEY
+    terms: https://www.anthropic.com/legal/commercial-terms
+    note: 商用利用可（Anthropic 商用利用規約）。ただし質問文と実行結果が Anthropic に送信される
+    models:
+      # モデル ID は claude-api スキルの表（2026-06 時点）に基づく
+      - name: claude-opus-5
+        label: Claude Opus 5
+        context: 1000000
+        input_per_mtok: 5.0
+        output_per_mtok: 25.0
+        recommended: true
+        note: 既定。1M context なのでシステムプロンプトの制約から解放される
+      - name: claude-sonnet-5
+        label: Claude Sonnet 5
+        context: 1000000
+        input_per_mtok: 3.0
+        output_per_mtok: 15.0
+        note: 大量に回すとき
+      - name: claude-opus-4-8
+        label: Claude Opus 4.8
+        context: 1000000
+        input_per_mtok: 5.0
+        output_per_mtok: 25.0
+      - name: claude-haiku-4-5
+        label: Claude Haiku 4.5
+        context: 200000
+        input_per_mtok: 1.0
+        output_per_mtok: 5.0
+        note: 抽出フェーズだけ安く回したいとき
+    # 4.6 以降のモデルは temperature を受け付けない（400 になる）
+    no_temperature_prefixes: [claude-opus-5, claude-sonnet-5, claude-opus-4, claude-sonnet-4-6, claude-fable-5]

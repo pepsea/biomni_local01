@@ -82,6 +82,10 @@ class AgentBundle:
     tool_count: int = 0
     biomni_version: str = ""
     system_prompt_chars: int = 0
+    #: LLM のトークンストリーム。ランごとに sink を差し替えて実況に使う
+    token_stream: Any = None
+    #: import できずに除外したモジュール -> 不足パッケージ
+    unusable_modules: dict[str, str] = field(default_factory=dict)
 
     @property
     def estimated_prompt_tokens(self) -> int:
@@ -110,6 +114,7 @@ class AgentBundle:
             f"tools available  : {self.tool_count}",
             f"tools removed    : {', '.join(self.removed_tools) or '(なし)'}",
             f"modules kept     : {len(self.kept_modules)}",
+            f"modules unusable : {', '.join(self.unusable_modules) or '(なし)'}",
             f"system prompt    : {self.system_prompt_chars:,} 文字 "
             f"(≒{self.estimated_prompt_tokens:,} トークン / num_ctx の {self.context_utilization:.0%})",
         ]
@@ -118,6 +123,10 @@ class AgentBundle:
                 f"  ⚠️ システムプロンプトが context の {self.context_utilization:.0%} を占めています。"
                 "モジュールを減らすか num_ctx を上げてください。"
             )
+        for module, package in self.unusable_modules.items():
+            lines.append(f"  ⚠️ {module} を除外しました（{package} が未インストール）")
+        if self.unusable_modules:
+            lines.append(f"  → 入れるなら: pip install {' '.join(sorted(set(self.unusable_modules.values())))}")
         return "\n".join(lines)
 
 
@@ -177,9 +186,15 @@ def build_agent(
 
     # ★ stop シーケンスと num_ctx を効かせるため LLM を差し替える（§4.1, §4.2）。
     # generate ノードは self.llm を実行時参照するので、グラフの再構築は不要。
-    agent.llm = build_agent_llm(settings)
+    # 同時にトークンストリームのハンドラを仕込む（リアルタイム表示用）。
+    agent.llm, token_stream = build_agent_llm(settings)
 
     kept_modules = _restrict_modules(agent, tool_modules)
+    # import できないモジュールのツールは、案内しても実行時に必ず失敗する。
+    # 案内すると「ツールを呼ぶ -> ImportError -> 直そうとする」のループに陥るので、
+    # 先に落としておく（実運用で観測した最頻の失敗モード）。
+    unusable = _drop_unimportable_modules(agent)
+    kept_modules = [m for m in kept_modules if m not in unusable]
     removed = _apply_tool_policy(agent, policy)
 
     # module2api を変更したので、システムプロンプトを作り直す。
@@ -195,7 +210,20 @@ def build_agent(
         tool_count=tool_count,
         biomni_version=biomni_version,
         system_prompt_chars=len(getattr(agent, "system_prompt", "") or ""),
+        token_stream=token_stream,
+        unusable_modules=unusable,
     )
+    if not agent.module2api:
+        raise RuntimeError(
+            "使えるツールが 1 つもありません。ツールモジュールの依存が不足しています:\n  pip install "
+            + " ".join(sorted(set(unusable.values())))
+        )
+    if unusable:
+        log.warning(
+            "import できないモジュールを除外しました: %s。入れるなら pip install %s",
+            ", ".join(unusable),
+            " ".join(sorted(set(unusable.values()))),
+        )
     if bundle.context_utilization > CONTEXT_WARN_RATIO:
         log.warning(
             "システムプロンプトが num_ctx の %.0f%% を占めています "
@@ -218,6 +246,52 @@ def _restrict_modules(agent: Any, tool_modules: tuple[str, ...] | None) -> list[
         return list(agent.module2api)
     agent.module2api = {m: agent.module2api[m] for m in keep}
     return sorted(keep)
+
+
+#: import 失敗時に出てくるモジュール名 -> 入れるべき pip パッケージ名
+_PACKAGE_FOR_MODULE = {
+    "Bio": "biopython",
+    "bs4": "beautifulsoup4",
+    "PyPDF2": "PyPDF2",
+    "googlesearch": "googlesearch-python",
+    "torch": "torch",
+    "esm": "fair-esm",
+    "rdkit": "rdkit",
+    "scanpy": "scanpy",
+    "anndata": "anndata",
+    "pyensembl": "pyensembl",
+}
+
+
+def _drop_unimportable_modules(agent: Any) -> dict[str, str]:
+    """実際に import できないツールモジュールを外す。
+
+    biomni のツールモジュールはそれぞれ独自の依存を持つ（database は Biopython、
+    literature は BeautifulSoup など）。入っていないと、エージェントは
+    システムプロンプトで案内されたツールを呼び、ImportError を受け取り、
+    直そうとして同じことを繰り返す。実運用で観測した最頻の失敗モード。
+
+    Returns:
+        除外したモジュール名 -> 不足パッケージ名
+    """
+    import importlib
+
+    unusable: dict[str, str] = {}
+    for module in list(agent.module2api):
+        try:
+            importlib.import_module(module)
+        except Exception as exc:  # noqa: BLE001 - どんな失敗でも「使えない」で同じ
+            missing = getattr(exc, "name", None) or type(exc).__name__
+            unusable[module] = _PACKAGE_FOR_MODULE.get(missing, missing)
+            del agent.module2api[module]
+
+    registry = getattr(agent, "tool_registry", None)
+    if registry is not None and unusable:
+        usable_names = {a["name"] for apis in agent.module2api.values() for a in apis}
+        for tool in list(getattr(registry, "tools", [])):
+            if tool.get("name") not in usable_names:
+                registry.remove_tool_by_name(tool["name"])
+    return unusable
 
 
 def _apply_tool_policy(agent: Any, policy: ResourcePolicy) -> list[str]:

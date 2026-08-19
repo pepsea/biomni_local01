@@ -16,10 +16,12 @@
 | コアパッケージ (`biomni_hypo/`) | ✅ 実装済み |
 | 検証ノートブック (`notebooks/`) | ✅ 5 本 |
 | API + SSE (`backend/`) | ✅ 実装済み・実サーバで動作確認 |
-| テスト | ✅ **200 件**（うち 12 件は実物の biomni に対する統合テスト） |
+| テスト | ✅ **214 件**（うち 16 件は実物の biomni に対する統合テスト） |
 | モデル選択 | ✅ ローカルの Ollama を読み込んで選択（ライセンス判定つき） |
 | 質問入力 | ✅ 構造化入力・テンプレート・入力検査・プロンプト確認 |
-| Web UI | ✅ 依存なしの 1 ファイル（`/`）。React 版は未着手（設計は [07](docs/design/07-ui-design.md)） |
+| Web UI | ✅ 依存なしの 1 ファイル（`/`）。回答・根拠・情報源・リアルタイムトレース |
+| リアルタイム出力 | ✅ トークン単位の実況（biomni 無改変） |
+| LLM プロバイダ | ✅ Ollama（ローカル）と Claude API を選択 |
 
 **検証済み**: biomni 0.0.8 を実際にインストールし、モック Ollama サーバを相手に
 A1 の構築・ReAct ループ・ポリシーガード・パイプライン全体が動くことを確認した。
@@ -120,7 +122,7 @@ jupyter lab notebooks/
 make api            # uvicorn backend.app.main:app --port 8000
 ```
 
-ブラウザで **http://localhost:8000** を開くと入力画面が出ます。
+ブラウザで **http://localhost:8000** を開きます。
 
 ```
 モード  ● 仮説生成   ○ 根拠検証   ○ データ解釈
@@ -130,8 +132,19 @@ make api            # uvicorn backend.app.main:app --port 8000
 生物種 [ヒト]   対象 [TNBC、オラパリブ投与下]
 注目   [BRCA1, BRCA2, 相同組換え修復]
 
-           [ 仮説を構築する ]  [ プロンプトを確認 ]
+           [ 調べる ]  [ プロンプトを確認 ]
 ```
+
+実行すると 4 つのタブに結果が出ます。
+
+| タブ | 内容 |
+| --- | --- |
+| **回答** | 質問への直接の回答と、その根拠 |
+| **仮説** | 検証可能な仮説・根拠・検証プラン |
+| **集めた情報** | 使用したデータとライセンス、引用した文献・DB レコード |
+| **実行トレース** | **生成中のトークンをリアルタイム表示** + 手順（コード・出力を展開可） |
+
+根拠のチップをクリックすると、実行結果からの抜粋・それを出したコード・由来ステップが開きます。
 
 `text` 以外は任意ですが、埋めるほど探索が安定します。埋まっていない項目は指摘が出ます。
 **「プロンプトを確認」で、エージェントに何を投げるかを実行前に見られます。**
@@ -159,12 +172,12 @@ Docker なら `docker compose up`（ollama + api）。
 ```
 biomni_hypo/     共有コアパッケージ ← ノートブックも Web アプリもここを呼ぶ
   question.py    調べたいことの入力・検査・プロンプト組み立て
-  models.py      ローカルモデルの探索・ライセンス判定・選択
+  models.py      モデルの探索（Ollama / Claude API）・ライセンス判定・選択
 notebooks/       検証ハーネス（ロジックは書かない。テストで強制）
 backend/app/     FastAPI + SSE + ラン実行ワーカー（子プロセス）+ 最小 UI
 config/          resource_policy.yaml（商用限定・既定拒否）
 scripts/         質問の実行(ask)・モデル一覧・データセット取得・セットアップ
-tests/           200 件。うち 188 件は外部サービス不要
+tests/           214 件。うち 198 件は外部サービス不要
 docs/design/     設計書
 ```
 
@@ -182,6 +195,7 @@ docs/design/     設計書
 | [08-roadmap](docs/design/08-roadmap.md) | フェーズ計画・受け入れ基準・リスク |
 | [09-implementation](docs/design/09-implementation.md) | 実装の構成（ノートブックと Web アプリの関係） |
 | [10-question-input](docs/design/10-question-input.md) | **調べたいことの入力**（構造化・検査・プロンプト組み立て） |
+| [11-realtime-and-providers](docs/design/11-realtime-and-providers.md) | **リアルタイム出力**とプロバイダ選択（Ollama / Claude API） |
 
 ## 設計の要点
 

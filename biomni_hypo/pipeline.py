@@ -127,6 +127,9 @@ def run_hypothesis(
     # --- 3. 検証フェーズ ------------------------------------------------------
     emit("phase", {"phase": "verifying"})
     verifier = verifier or EvidenceVerifier(offline=settings.offline_mode)
+    # 回答の根拠も同じ基準で検証する（仮説と扱いを変えない）
+    result.answer = extraction.answer
+    result.answer_evidence = verifier.verify_evidence_list(extraction.answer_evidence, trace.steps)
     supported, unsupported, report = verifier.verify_run(extraction.hypotheses, trace.steps)
     result.hypotheses = supported
     result.unsupported_ideas = unsupported
@@ -136,6 +139,11 @@ def run_hypothesis(
 
     # --- 4. 使用リソースの集計 ------------------------------------------------
     result.resources_used = collect_resources(trace.steps, policy)
+
+    if not result.answer and trace.solution_text:
+        # 抽出が失敗しても、エージェントの結論だけは見せる
+        result.answer = trace.solution_text
+        result.extra["answer_is_unstructured"] = True
 
     result.status = "failed" if (result.error and not result.steps) else "succeeded"
     result.finished_at = datetime.now(UTC)

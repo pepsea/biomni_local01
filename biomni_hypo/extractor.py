@@ -32,6 +32,15 @@ log = logging.getLogger(__name__)
 HYPOTHESIS_JSON_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
+        "answer": {"type": "string"},
+        "answer_evidence": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"eid": {"type": "string"}, "why": {"type": "string"}},
+                "required": ["eid"],
+            },
+        },
         "hypotheses": {
             "type": "array",
             "items": {
@@ -78,12 +87,12 @@ HYPOTHESIS_JSON_SCHEMA: dict[str, Any] = {
                 },
                 "required": ["statement", "rationale", "confidence", "evidence", "test_plan"],
             },
-        }
+        },
     },
-    "required": ["hypotheses"],
+    "required": ["answer", "hypotheses"],
 }
 
-PROMPT_TEMPLATE = """あなたは生物医学の研究者です。以下の調査ログから、検証可能な仮説を最大 {max_hypotheses} 件抽出してください。
+PROMPT_TEMPLATE = """あなたは生物医学の研究者です。以下の調査ログから、(1) 質問への回答 と (2) 検証可能な仮説（最大 {max_hypotheses} 件）を抽出してください。
 
 # 研究課題
 {question}
@@ -98,7 +107,10 @@ PROMPT_TEMPLATE = """あなたは生物医学の研究者です。以下の調�
 {candidates_block}
 
 # 厳守事項
-1. evidence の eid は、上の「使用できる根拠」に載っている ID のみを使うこと。
+0. answer は日本語で 3〜5 文。質問に正面から答えること。
+   調査で分かったことだけを書き、分からなかったことは「分からなかった」と書くこと。
+   answer_evidence には、その回答を支える根拠 ID を挙げること。
+1. evidence / answer_evidence の eid は、上の「使用できる根拠」に載っている ID のみを使うこと。
    リストに無い ID・自分で考えた PMID や遺伝子 ID を書いてはいけません。
 2. statement に PMID や DOI やアクセッション番号を直接書かないこと。識別子は evidence でのみ表現します。
 3. 根拠が見つからない着想も、evidence を空配列にして出力してよい（捨てないこと）。
@@ -107,7 +119,9 @@ PROMPT_TEMPLATE = """あなたは生物医学の研究者です。以下の調�
 6. JSON のみを出力すること。前後に説明文を付けないこと。
 
 # 出力する JSON の形
-{{"hypotheses": [{{"statement": "...", "rationale": "...", "confidence": "high|medium|low",
+{{"answer": "調査の結果、…（3〜5 文）",
+  "answer_evidence": [{{"eid": "E1", "why": "…"}}],
+  "hypotheses": [{{"statement": "...", "rationale": "...", "confidence": "high|medium|low",
   "novelty": "established|emerging|speculative",
   "evidence": [{{"eid": "E1", "stance": "supports", "claim_span": "...", "why": "..."}}],
   "assumptions": ["..."],
@@ -118,6 +132,8 @@ PROMPT_TEMPLATE = """あなたは生物医学の研究者です。以下の調�
 
 @dataclass
 class ExtractionResult:
+    answer: str = ""
+    answer_evidence: list[Evidence] = field(default_factory=list)
     hypotheses: list[Hypothesis] = field(default_factory=list)
     candidates: list[EvidenceCandidate] = field(default_factory=list)
     unknown_eids: list[str] = field(default_factory=list)
@@ -126,7 +142,7 @@ class ExtractionResult:
 
     @property
     def ok(self) -> bool:
-        return bool(self.hypotheses) and not self.parse_error
+        return bool(self.answer or self.hypotheses) and not self.parse_error
 
 
 # --------------------------------------------------------------- 根拠候補の構築
@@ -236,6 +252,9 @@ def parse_response(raw: str, candidates: Iterable[EvidenceCandidate]) -> Extract
         result.parse_error = "JSON としてパースできませんでした"
         return result
 
+    result.answer = str(payload.get("answer", "")).strip()
+    result.answer_evidence = _build_evidence(payload.get("answer_evidence"), by_eid, result)
+
     items = payload.get("hypotheses")
     if not isinstance(items, list):
         result.parse_error = "'hypotheses' 配列がありません"
@@ -244,29 +263,7 @@ def parse_response(raw: str, candidates: Iterable[EvidenceCandidate]) -> Extract
     for i, item in enumerate(items, start=1):
         if not isinstance(item, dict) or not str(item.get("statement", "")).strip():
             continue
-        evidences: list[Evidence] = []
-        for ev in item.get("evidence") or []:
-            if not isinstance(ev, dict):
-                continue
-            eid = str(ev.get("eid", "")).strip()
-            cand = by_eid.get(eid)
-            if cand is None:
-                # トレースに存在しない ID = 幻覚。仮説自体は残し、根拠だけ落とす。
-                result.unknown_eids.append(eid)
-                continue
-            evidences.append(
-                Evidence(
-                    eid=cand.eid,
-                    kind=cand.kind,
-                    identifier=cand.identifier,
-                    stance=_stance(ev.get("stance")),
-                    claim_span=str(ev.get("claim_span", ""))[:400],
-                    why=str(ev.get("why", ""))[:600],
-                    excerpt=cand.excerpt,  # 抜粋は必ず実テキストから。LLM には書かせない
-                    step_idx=cand.step_idx,
-                    url=cand.url,
-                )
-            )
+        evidences = _build_evidence(item.get("evidence"), by_eid, result)
         tp = item.get("test_plan") or {}
         result.hypotheses.append(
             Hypothesis(
@@ -289,9 +286,39 @@ def parse_response(raw: str, candidates: Iterable[EvidenceCandidate]) -> Extract
             )
         )
 
-    if not result.hypotheses:
-        result.parse_error = result.parse_error or "有効な仮説が 1 件もありませんでした"
+    if not result.hypotheses and not result.answer:
+        result.parse_error = result.parse_error or "有効な回答も仮説も得られませんでした"
     return result
+
+
+def _build_evidence(
+    raw: Any, by_eid: dict[str, EvidenceCandidate], result: ExtractionResult
+) -> list[Evidence]:
+    """LLM が挙げた根拠 ID を Evidence に変換する。未知の ID はここで落とす。"""
+    out: list[Evidence] = []
+    for ev in raw or []:
+        if not isinstance(ev, dict):
+            continue
+        eid = str(ev.get("eid", "")).strip()
+        cand = by_eid.get(eid)
+        if cand is None:
+            # トレースに存在しない ID = 幻覚。主張自体は残し、根拠だけ落とす。
+            result.unknown_eids.append(eid)
+            continue
+        out.append(
+            Evidence(
+                eid=cand.eid,
+                kind=cand.kind,
+                identifier=cand.identifier,
+                stance=_stance(ev.get("stance")),
+                claim_span=str(ev.get("claim_span", ""))[:400],
+                why=str(ev.get("why", ""))[:600],
+                excerpt=cand.excerpt,  # 抜粋は必ず実テキストから。LLM には書かせない
+                step_idx=cand.step_idx,
+                url=cand.url,
+            )
+        )
+    return out
 
 
 def _stance(value: Any) -> Stance:
@@ -344,13 +371,19 @@ class HypothesisExtractor:
     @property
     def llm(self) -> Any:
         if self._llm is None:
-            from biomni_hypo.llm import build_chat_ollama
+            from biomni_hypo.llm import build_llm
 
-            self._llm = build_chat_ollama(
+            # Claude は温度を受け付けないモデルがあるので、Ollama のときだけ渡す
+            temperature = (
+                self.settings.extractor_temperature
+                if self.settings.provider == "ollama"
+                else None
+            )
+            self._llm = build_llm(
                 self.settings,
                 model=self.settings.extractor_model_name(),
-                temperature=self.settings.extractor_temperature,
-                fmt=HYPOTHESIS_JSON_SCHEMA,
+                temperature=temperature,
+                fmt=HYPOTHESIS_JSON_SCHEMA if self.settings.provider == "ollama" else None,
             )
         return self._llm
 

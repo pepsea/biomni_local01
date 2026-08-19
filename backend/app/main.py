@@ -131,10 +131,16 @@ def _next_seq(run_id: str) -> int:
     return _seq[run_id]
 
 
+#: 永続化しないイベント。トークンは毎秒数十件流れるうえ、
+#: 再接続時に読み直しても意味がない（確定したステップだけ残ればよい）
+_EPHEMERAL_EVENTS = {"token"}
+
+
 async def _publish(run_id: str, kind: str, payload: dict[str, Any]) -> None:
     """永続化してから配信する（接続していない間の取りこぼしを防ぐ）。"""
     seq = _next_seq(run_id)
-    STORE.append_event(run_id, seq, kind, payload)
+    if kind not in _EPHEMERAL_EVENTS:
+        STORE.append_event(run_id, seq, kind, payload)
     event = {"seq": seq, "kind": kind, "payload": payload}
     for q in list(_subscribers.get(run_id, ())):
         q.put_nowait(event)
@@ -198,6 +204,27 @@ async def health() -> dict[str, Any]:
         "running": list(_running),
         "commercial_mode": SETTINGS.commercial_mode,
     }
+
+
+@app.get("/api/providers")
+async def providers() -> dict[str, Any]:
+    """使える LLM プロバイダ。ローカル完結かどうかを明示する。"""
+    out = []
+    for name, entry in POLICY.providers().items():
+        needs = entry.get("requires_env", "")
+        ready = True if entry.get("local") else bool(getattr(SETTINGS, "anthropic_api_key", ""))
+        out.append(
+            {
+                "name": name,
+                "label": entry.get("label", name),
+                "local": bool(entry.get("local")),
+                "note": entry.get("note", ""),
+                "terms": entry.get("terms", ""),
+                "requires_env": needs,
+                "ready": ready,
+            }
+        )
+    return {"providers": out, "current": SETTINGS.provider}
 
 
 @app.get("/api/policy")

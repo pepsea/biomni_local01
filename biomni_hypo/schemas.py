@@ -186,6 +186,7 @@ class VerificationSummary(BaseModel):
 class RunConfig(BaseModel):
     """1 ランの再現に必要な設定すべて。レポートにそのまま載る。"""
 
+    provider: str = "ollama"
     model: str = "qwen3:14b"
     temperature: float = 0.7
     num_ctx: int = 32768
@@ -219,6 +220,9 @@ class RunResult(BaseModel):
     resources_used: list[Resource] = Field(default_factory=list)
     steps: list[Step] = Field(default_factory=list)
     solution_text: str = ""
+    #: 質問への直接の回答（根拠に紐付いた要約）
+    answer: str = ""
+    answer_evidence: list[Evidence] = Field(default_factory=list)
     hypotheses: list[Hypothesis] = Field(default_factory=list)
     unsupported_ideas: list[Hypothesis] = Field(default_factory=list)
     failed_citations: list[FailedCitation] = Field(default_factory=list)

@@ -121,7 +121,40 @@ def test_module_presets_control_the_prompt_size(policy):
 
     assert core.system_prompt_chars < full.system_prompt_chars
     assert core.context_utilization < 0.4, "CORE でも context の 4 割を超えている"
-    assert full.estimated_prompt_tokens > 32768 * 0.9, "絞り込みなしが軽くなった。既定を見直せる"
+    # 絞り込まないと num_ctx=32768 の大半をシステムプロンプトが占める。
+    # （import できないモジュールは自動で外れるので、環境によって数値は動く）
+    assert full.context_utilization > 0.7, "絞り込みなしが軽くなった。既定を見直せる"
+
+
+def test_unimportable_modules_are_dropped(policy):
+    """依存が無いモジュールのツールをエージェントに案内しない。
+
+    案内すると「ツールを呼ぶ -> ImportError -> 直そうとする」のループに陥る
+    （実運用で観測した最頻の失敗モード）。
+    """
+    with MockOllama() as mock:
+        bundle = build_agent(_settings(mock), policy, tool_modules=None)
+
+    for module in bundle.unusable_modules:
+        assert module not in bundle.agent.module2api
+    # 除外したモジュールのツールがシステムプロンプトに残っていないこと
+    assert bundle.agent.module2api, "すべてのモジュールが外れてしまった"
+    for module, package in bundle.unusable_modules.items():
+        assert package, f"{module} の不足パッケージ名が空"
+
+
+def test_literature_and_database_tools_are_available(policy):
+    """query_pubmed / query_gwas_catalog が実際に案内されること。
+
+    requirements.txt の biopython / beautifulsoup4 / PyPDF2 /
+    googlesearch-python が効いているかの確認。
+    """
+    with MockOllama() as mock:
+        bundle = build_agent(_settings(mock), policy, tool_modules=CORE_TOOL_MODULES)
+
+    names = {a["name"] for apis in bundle.agent.module2api.values() for a in apis}
+    assert "query_pubmed" in names, "literature モジュールが import できていない"
+    assert "query_gwas_catalog" in names, "database モジュールが import できていない"
 
 
 # ------------------------------------------------- 本物の ReAct ループ
@@ -252,3 +285,45 @@ def test_full_pipeline_against_mock_ollama(policy):
     md = to_markdown(result)
     assert "# 仮説構築レポート" in md
     assert "ポリシーによりブロック" in md
+
+
+# ------------------------------------------------- リアルタイム出力
+
+
+def test_tokens_stream_in_real_time_through_the_real_graph(policy):
+    """A1 は invoke() を同期で呼ぶが、ChatOllama は内部でストリーミングしている。
+
+    biomni を改変せずにトークン単位の実況が取れることを固定する。
+    """
+    replies = [
+        "GWAS を調べます。\n<execute>\nprint('PMID: 17529967')\n</execute>",
+        "<solution>結論です。</solution>",
+    ]
+    events: list[tuple[str, dict]] = []
+    with MockOllama(replies=replies) as mock:
+        bundle = build_agent(
+            _settings(mock, max_steps=20), policy, tool_modules=CORE_TOOL_MODULES
+        )
+        assert bundle.token_stream is not None
+        runner = TracingRunner(bundle, run_id="stream")
+        result = runner.run("質問", on_event=lambda k, p: events.append((k, p)))
+
+    tokens = [p for k, p in events if k == "token"]
+    assert [p["kind"] for p in tokens].count("start") == len(replies)
+    assert [p["kind"] for p in tokens].count("end") == len(replies)
+
+    streamed = "".join(p["text"] for p in tokens if p["kind"] == "token")
+    assert "GWAS" in streamed and "solution" in streamed
+    assert result.streamed_tokens > 0
+
+    # トークンはステップより先に届く（実況になっている）
+    kinds = [k for k, _ in events]
+    assert kinds.index("token") < kinds.index("step")
+
+
+def test_token_sink_is_detached_after_the_run(policy):
+    """ランの外では実況しない（リソース検索など内部呼び出しまで流さない）。"""
+    with MockOllama(replies=["<solution>done</solution>"]) as mock:
+        bundle = build_agent(_settings(mock), policy, tool_modules=CORE_TOOL_MODULES)
+        TracingRunner(bundle, run_id="detach").run("質問", on_event=lambda k, p: None)
+        assert bundle.token_stream.sink is None

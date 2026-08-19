@@ -260,3 +260,33 @@ def test_health_reports_dependency_status(client):
     assert isinstance(deps["missing"], list)
     if not deps["ok"]:
         assert deps["install"].startswith("pip install")
+
+
+def test_providers_endpoint_marks_local_vs_cloud(client):
+    body = client.get("/api/providers").json()
+    by_name = {p["name"]: p for p in body["providers"]}
+    assert by_name["ollama"]["local"] is True
+    assert by_name["anthropic"]["local"] is False
+    assert by_name["anthropic"]["requires_env"] == "ANTHROPIC_API_KEY"
+    assert "外部" in by_name["anthropic"]["note"] or "送信" in by_name["anthropic"]["note"]
+
+
+def test_models_endpoint_includes_cloud_models(client_with_ollama):
+    client, _mock = client_with_ollama
+    body = client.get("/api/models").json()
+    cloud = [m for m in body["models"] if not m["local"]]
+    assert cloud, "クラウドのモデルが一覧に出ていない"
+    opus = next(m for m in cloud if m["name"] == "claude-opus-5")
+    assert opus["max_context"] == 1000000
+    assert opus["input_per_mtok"] == 5.0
+    # API キーが無い環境では installed=False + 理由付き
+    assert opus["installed"] is False
+    assert "ANTHROPIC_API_KEY" in opus["reason"]
+
+
+def test_index_page_has_answer_and_live_sections(client):
+    html = client.get("/").text
+    assert 'id="tab-answer"' in html
+    assert 'id="tab-sources"' in html
+    assert 'addEventListener("token"' in html   # リアルタイム表示
+    assert 'id="drawer"' in html                # 根拠ドロワー

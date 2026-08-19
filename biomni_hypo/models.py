@@ -28,10 +28,12 @@ NUM_CTX_STEPS = (8192, 16384, 32768, 65536, 131072)
 
 
 @dataclass
-class LocalModel:
-    """ローカルに pull 済みのモデル 1 件。"""
+class ModelOption:
+    """選択肢になるモデル 1 件（ローカルもクラウドも同じ型で扱う）。"""
 
     name: str
+    provider: str = "ollama"
+    label: str = ""
     size_bytes: int = 0
     family: str = ""
     parameter_size: str = ""
@@ -46,6 +48,11 @@ class LocalModel:
     matched_by: str = ""
     #: 未取得の推奨モデル（pull を促すために一覧へ混ぜる）
     installed: bool = True
+    #: データがローカルから出ないか。False なら質問文が外部へ送信される
+    local: bool = True
+    #: クラウドモデルの参考価格（$/1M トークン）
+    input_per_mtok: float = 0.0
+    output_per_mtok: float = 0.0
 
     @property
     def size_gb(self) -> float:
@@ -61,9 +68,18 @@ class LocalModel:
             return requested
         return min(requested, self.max_context)
 
+    @property
+    def display_name(self) -> str:
+        return self.label or self.name
+
     def as_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
+            "provider": self.provider,
+            "label": self.display_name,
+            "local": self.local,
+            "input_per_mtok": self.input_per_mtok,
+            "output_per_mtok": self.output_per_mtok,
             "installed": self.installed,
             "size_gb": self.size_gb,
             "family": self.family,
@@ -83,27 +99,27 @@ class LocalModel:
 class ModelCatalog:
     """ローカルのモデル一覧と、Ollama への到達状況。"""
 
-    models: list[LocalModel] = field(default_factory=list)
+    models: list[ModelOption] = field(default_factory=list)
     reachable: bool = False
     base_url: str = ""
     error: str = ""
 
     @property
-    def selectable(self) -> list[LocalModel]:
+    def selectable(self) -> list[ModelOption]:
         """実際に選べるもの = pull 済み かつ ポリシー許可。"""
         return [m for m in self.models if m.installed and m.allowed]
 
     @property
-    def blocked(self) -> list[LocalModel]:
+    def blocked(self) -> list[ModelOption]:
         return [m for m in self.models if m.installed and not m.allowed]
 
-    def get(self, name: str) -> LocalModel | None:
+    def get(self, name: str) -> ModelOption | None:
         for m in self.models:
             if m.name == name:
                 return m
         return None
 
-    def default(self, preferred: str = "") -> LocalModel | None:
+    def default(self, preferred: str = "") -> ModelOption | None:
         """既定で選ぶべきモデル。
 
         1. preferred が選択可能ならそれ
@@ -122,12 +138,12 @@ class ModelCatalog:
 
     def as_table(self) -> str:
         """ノートブックと CLI 用のテキスト表。"""
-        if not self.reachable:
-            return f"Ollama に到達できません ({self.base_url}): {self.error}"
         if not self.models:
+            if not self.reachable:
+                return f"Ollama に到達できません ({self.base_url}): {self.error}"
             return "モデルが 1 つも見つかりません。`ollama pull qwen3:14b` を実行してください。"
 
-        rows = [f"{'':2s} {'モデル':34s} {'サイズ':>7s} {'ctx':>8s} {'ライセンス':22s} 備考"]
+        rows = [f"{'':2s} {'モデル':34s} {'種別':10s} {'サイズ':>7s} {'ctx':>10s} 備考"]
         for m in self.models:
             if not m.installed:
                 mark = "…"
@@ -135,12 +151,19 @@ class ModelCatalog:
                 mark = "★" if m.recommended else "✓"
             else:
                 mark = "✕"
+            kind = "ローカル" if m.local else "クラウド"
             note = m.reason or m.note or ("未取得: ollama pull " + m.name if not m.installed else "")
+            if not m.local and m.input_per_mtok:
+                note = f"${m.input_per_mtok}/${m.output_per_mtok} per 1M · {note}".strip(" ·")
             size = f"{m.size_gb}GB" if m.size_bytes else "-"
             ctx = f"{m.max_context:,}" if m.max_context else "-"
-            rows.append(f"{mark:2s} {m.name:34s} {size:>7s} {ctx:>8s} {m.license:22s} {note[:44]}")
+            rows.append(f"{mark:2s} {m.name:34s} {kind:10s} {size:>7s} {ctx:>10s} {note[:46]}")
         rows.append("")
-        rows.append("★ 推奨 / ✓ 選択可 / ✕ ライセンス不可 / … 未取得")
+        if not self.reachable:
+            rows.append(f"⚠️ Ollama に到達できません（{self.base_url}）。ローカルのモデルは選べません")
+        rows.append("★ 推奨 / ✓ 選択可 / ✕ 不可 / … 未取得")
+        if any(not m.local and m.allowed for m in self.models):
+            rows.append("⚠️ クラウドのモデルを選ぶと、質問文と実行結果が外部に送信されます")
         return "\n".join(rows)
 
 
@@ -171,7 +194,7 @@ def list_local_models(
             continue
         details = entry.get("details") or {}
         decision = policy.check_model(name)
-        model = LocalModel(
+        model = ModelOption(
             name=name,
             size_bytes=int(entry.get("size") or 0),
             family=details.get("family", ""),
@@ -189,7 +212,10 @@ def list_local_models(
             model.max_context = _max_context(base, name, timeout=timeout)
         catalog.models.append(model)
 
-    catalog.models.sort(key=lambda m: (not m.recommended, not m.allowed, -m.size_bytes, m.name))
+    catalog.models += _cloud_models(settings, policy)
+    catalog.models.sort(
+        key=lambda m: (not m.recommended, not m.allowed, not m.installed, -m.size_bytes, m.name)
+    )
 
     if include_not_installed:
         installed = {m.name for m in catalog.models}
@@ -198,7 +224,7 @@ def list_local_models(
                 continue
             d = policy.check_model(name)
             catalog.models.append(
-                LocalModel(
+                ModelOption(
                     name=name,
                     license=d.license,
                     allowed=d.allowed,
@@ -209,6 +235,40 @@ def list_local_models(
                 )
             )
     return catalog
+
+
+def _cloud_models(settings: Settings, policy: ResourcePolicy) -> list[ModelOption]:
+    """クラウド（Claude API）のモデルを一覧に混ぜる。
+
+    API キーが無ければ `installed=False` で出す。何を設定すれば使えるかが
+    分かるようにするため、黙って隠さない。
+    """
+    out: list[ModelOption] = []
+    for provider_name, provider in policy.providers().items():
+        if provider.get("local", True):
+            continue
+        has_key = bool(settings.anthropic_api_key) if provider_name == "anthropic" else False
+        env_var = provider.get("requires_env", "")
+        for entry in provider.get("models") or []:
+            out.append(
+                ModelOption(
+                    name=entry["name"],
+                    provider=provider_name,
+                    label=entry.get("label", ""),
+                    max_context=int(entry.get("context") or 0),
+                    license=provider.get("label", provider_name),
+                    allowed=True,
+                    installed=has_key,
+                    local=False,
+                    recommended=bool(entry.get("recommended")) and has_key,
+                    input_per_mtok=float(entry.get("input_per_mtok") or 0),
+                    output_per_mtok=float(entry.get("output_per_mtok") or 0),
+                    note=entry.get("note", ""),
+                    reason="" if has_key else f"{env_var} が未設定です",
+                    matched_by="provider",
+                )
+            )
+    return out
 
 
 def _max_context(base_url: str, name: str, timeout: float = 5.0) -> int:
@@ -229,13 +289,14 @@ def _max_context(base_url: str, name: str, timeout: float = 5.0) -> int:
     return 0
 
 
-def resolve_num_ctx(model: LocalModel | None, requested: int, prompt_tokens: int = 0) -> tuple[int, str]:
+def resolve_num_ctx(model: ModelOption | None, requested: int, prompt_tokens: int = 0) -> tuple[int, str]:
     """使うべき num_ctx と、その理由を返す。
 
     - モデルの上限を超えていたら丸める（超えると Ollama が黙って切り詰める）
     - システムプロンプトを引いた残りが会話に足りなければ警告する
     """
-    if model is None:
+    if model is None or not model.local:
+        # クラウドのモデルは num_ctx を指定しない
         return requested, ""
 
     resolved = model.suggested_num_ctx(requested)
@@ -286,11 +347,14 @@ def apply_model_selection(
     notes: list[str] = []
     wanted = model or settings.model
 
-    if not catalog.reachable:
+    if not catalog.reachable and not catalog.selectable:
+        # Ollama も落ちていて、クラウドも使えない
         message = f"Ollama に到達できません ({catalog.base_url}): {catalog.error}"
         if strict:
             raise ModelNotAvailable(message)
         return catalog, [message]
+    if not catalog.reachable:
+        notes.append(f"Ollama に到達できません（{catalog.base_url}）。クラウドのモデルのみ選べます")
 
     selected = catalog.get(wanted)
 
@@ -324,9 +388,25 @@ def apply_model_selection(
     if selected.name != wanted:
         notes.append(f"{selected.name} を代わりに選びました")
 
+    settings.provider = selected.provider
     settings.model = selected.name
+    if not selected.local:
+        notes.append(
+            "クラウドのモデルです。質問文と実行結果が外部に送信されます"
+            "（オフラインモードとは併用できません）"
+        )
+        if settings.offline_mode:
+            raise ModelNotAvailable(
+                "オフラインモードではクラウドのモデルを使えません。"
+                "ローカルのモデルを選ぶか、オフラインモードを解除してください。"
+            )
     resolved, note = resolve_num_ctx(selected, settings.num_ctx)
     if note:
         notes.append(note)
     settings.num_ctx = resolved
     return catalog, notes
+
+
+#: 後方互換のための別名
+LocalModel = ModelOption
+list_models = list_local_models

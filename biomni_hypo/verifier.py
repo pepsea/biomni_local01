@@ -118,6 +118,21 @@ class EvidenceVerifier:
         unsupported = [h for h in hypotheses if not h.is_supported]
         return supported, unsupported, report
 
+    def verify_evidence_list(self, evidences: list[Evidence], steps: Iterable[Step]) -> list[Evidence]:
+        """検証を通った根拠だけを返す（回答用）。
+
+        仮説と同じ基準で判定する。回答の根拠だけ緩めない。
+        """
+        index = TraceIndex.from_steps(steps)
+        kept: list[Evidence] = []
+        for ev in evidences:
+            status, note = self.verify_evidence(ev, index)
+            ev.verification_status = status
+            ev.verification_note = note
+            if status != VerificationStatus.FAILED:
+                kept.append(ev)
+        return kept
+
     def verify_evidence(self, ev: Evidence, index: TraceIndex) -> tuple[VerificationStatus, str]:
         # --- 包含チェック（C ⊆ B）。すべての種別に先に効かせる ------------------
         if ev.kind in (ResourceKind.LITERATURE, ResourceKind.DB_RECORD):

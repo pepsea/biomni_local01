@@ -113,8 +113,9 @@ def test_blocked_models_are_listed_with_reasons(catalog):
 
 
 def test_not_installed_recommendations_are_included(catalog):
-    not_installed = [m for m in catalog.models if not m.installed]
+    not_installed = [m for m in catalog.models if not m.installed and m.local]
     assert "qwen3:32b" in {m.name for m in not_installed}
+    # 未取得のローカルモデルは context 長を問い合わせない
     assert all(m.max_context == 0 for m in not_installed)
 
 
@@ -214,3 +215,92 @@ def test_no_usable_model_at_all(policy):
         s.ollama_base_url = mock.base_url
         _catalog, notes = apply_model_selection(s, policy, strict=False)
     assert any("使用できるモデルが 1 つもありません" in n for n in notes)
+
+
+# ------------------------------------------------------- クラウド（Claude API）
+
+
+def test_cloud_models_appear_without_api_key_but_not_installed(policy):
+    with MockOllama(models=LOCAL) as mock:
+        s = Settings()
+        s.ollama_base_url = mock.base_url
+        s.anthropic_api_key = ""
+        catalog = list_local_models(s, policy, fetch_context_length=False)
+
+    cloud = [m for m in catalog.models if not m.local]
+    assert {m.name for m in cloud} >= {"claude-opus-5", "claude-sonnet-5"}
+    assert all(not m.installed for m in cloud)
+    assert all("ANTHROPIC_API_KEY" in m.reason for m in cloud)
+    assert all(m.name not in {x.name for x in catalog.selectable} for m in cloud)
+
+
+def test_cloud_models_become_selectable_with_api_key(policy):
+    with MockOllama(models=LOCAL) as mock:
+        s = Settings()
+        s.ollama_base_url = mock.base_url
+        s.anthropic_api_key = "sk-test"
+        catalog = list_local_models(s, policy, fetch_context_length=False)
+
+    opus = catalog.get("claude-opus-5")
+    assert opus.installed and opus.allowed and opus.recommended
+    assert opus.provider == "anthropic" and not opus.local
+    assert opus.max_context == 1_000_000
+    assert opus.input_per_mtok == 5.0
+
+
+def test_selecting_a_cloud_model_switches_provider_and_warns(policy):
+    with MockOllama(models=LOCAL) as mock:
+        s = Settings()
+        s.ollama_base_url = mock.base_url
+        s.anthropic_api_key = "sk-test"
+        _catalog, notes = apply_model_selection(s, policy, model="claude-opus-5")
+
+    assert s.provider == "anthropic"
+    assert s.model == "claude-opus-5"
+    assert any("外部に送信" in n for n in notes), "外部送信の警告が出ていない"
+
+
+def test_offline_mode_rejects_cloud_models(policy):
+    """オフラインモードの約束（質問文を外部に出さない）を破らせない。"""
+    with MockOllama(models=LOCAL) as mock:
+        s = Settings()
+        s.ollama_base_url = mock.base_url
+        s.anthropic_api_key = "sk-test"
+        s.offline_mode = True
+        with pytest.raises(ModelNotAvailable, match="オフラインモード"):
+            apply_model_selection(s, policy, model="claude-opus-5")
+
+
+def test_cloud_models_are_usable_when_ollama_is_down(policy):
+    s = Settings()
+    s.ollama_base_url = "http://127.0.0.1:1"
+    s.anthropic_api_key = "sk-test"
+    catalog = list_local_models(s, policy, fetch_context_length=False)
+    assert not catalog.reachable
+    assert [m.name for m in catalog.selectable] == [
+        "claude-opus-5",
+        "claude-haiku-4-5",
+        "claude-opus-4-8",
+        "claude-sonnet-5",
+    ]
+    _catalog, notes = apply_model_selection(s, policy, catalog=catalog, strict=False)
+    assert s.provider == "anthropic"
+
+
+def test_num_ctx_is_not_applied_to_cloud_models(policy):
+    """Claude は num_ctx を持たない。丸め処理を通さないこと。"""
+    with MockOllama(models=LOCAL) as mock:
+        s = Settings()
+        s.ollama_base_url = mock.base_url
+        s.anthropic_api_key = "sk-test"
+        s.num_ctx = 32768
+        apply_model_selection(s, policy, model="claude-opus-5")
+    assert s.num_ctx == 32768
+
+
+def test_policy_knows_which_claude_models_reject_temperature(policy):
+    """Claude 4.6 以降は temperature を送ると 400 になる。"""
+    assert not policy.supports_temperature("anthropic", "claude-opus-5")
+    assert not policy.supports_temperature("anthropic", "claude-sonnet-5")
+    assert policy.supports_temperature("anthropic", "claude-haiku-4-5")
+    assert policy.supports_temperature("ollama", "qwen3:14b")

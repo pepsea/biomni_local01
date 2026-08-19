@@ -41,6 +41,7 @@ def to_markdown(result: RunResult, *, include_trace: bool = True) -> str:
     parts = [
         _header(result),
         _question_section(result),
+        _answer_section(result),
         _hypotheses_section(result),
         _unsupported_section(result),
         _verification_section(result),
@@ -63,7 +64,7 @@ def _header(r: RunResult) -> str:
         "| --- | --- |",
         f"| ラン ID | `{r.id}` |",
         f"| 状態 | {r.status} |",
-        f"| モデル | {c.model}（Ollama, temperature={c.temperature}, num_ctx={c.num_ctx}） |",
+        f"| モデル | {c.model}（{c.provider}{'' if c.provider != 'ollama' else f', num_ctx={c.num_ctx}'}） |",
         f"| モード | 商用限定={c.commercial_mode} / オフライン={c.offline_mode} |",
         f"| biomni | {c.biomni_version or '-'} |",
         f"| ポリシー版 | {c.policy_version} |",
@@ -121,6 +122,27 @@ def _question_section(r: RunResult) -> str:
 
     if r.prompt:
         lines += ["<details><summary>エージェントに渡したプロンプト</summary>", "", "```", r.prompt, "```", "", "</details>"]
+    return "\n".join(lines)
+
+
+def _answer_section(r: RunResult) -> str:
+    """質問への回答。根拠付きで、いちばん上に出す。"""
+    if not r.answer:
+        return ""
+    lines = ["## 回答", "", r.answer, ""]
+    if r.extra.get("answer_is_unstructured"):
+        lines.append("> ⚠️ 構造化に失敗したため、エージェントの結論をそのまま載せています。")
+        lines.append("")
+    if r.answer_evidence:
+        lines += ["**この回答の根拠**", "", "| 種別 | 識別子 | 検証 | 由来 |", "| --- | --- | --- | --- |"]
+        for ev in r.answer_evidence:
+            ident = f"[{ev.identifier}]({ev.url})" if ev.url else ev.identifier
+            lines.append(
+                f"| {_KIND_LABEL.get(ev.kind, ev.kind.value)} | {ident} | "
+                f"{_STATUS_MARK.get(ev.verification_status, '?')} | ステップ {ev.step_idx} |"
+            )
+    else:
+        lines.append("> ⚠️ この回答には検証を通った根拠が紐付いていません。")
     return "\n".join(lines)
 
 

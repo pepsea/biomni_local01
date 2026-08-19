@@ -11,10 +11,23 @@ uvicorn[standard]>=0.29
 biomni>=0.0.8
 langchain-ollama>=0.2
 langchain-core>=0.3
+# Claude API を選択肢に入れる場合
+langchain-anthropic>=0.3
 # biomni 0.0.8 が宣言していないが実際に必要な依存。
 # 入れないと `from biomni.agent import A1` が ModuleNotFoundError で落ちる
 pandas>=2.0
 langchain-openai>=0.2
+
+# biomni のツールモジュールが必要とする依存。
+# これが無いと biomni.tool.database / literature / molecular_biology が
+# import できず、エージェントは案内されたツールを一つも実行できない
+# （query_pubmed が "No module named 'Bio'" で失敗し、ループに陥る）
+biopython>=1.83
+beautifulsoup4>=4.12
+PyPDF2>=3.0
+# search_google（ポリシーで拒否しているツール）のためだけに literature モジュールが
+# import する。入れないと query_pubmed ごと使えなくなるので、モジュールを通すために入れる
+googlesearch-python>=1.2
 
 # 開発
 pytest>=8.0

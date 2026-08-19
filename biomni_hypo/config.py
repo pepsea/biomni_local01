@@ -61,6 +61,23 @@ API_DEPENDENCIES: tuple[Dependency, ...] = (
     Dependency("uvicorn", "uvicorn[standard]", "ASGI サーバ"),
 )
 
+#: biomni のツールモジュールが必要とするもの。
+#: **これが無いと、エージェントはツールを案内されるのに実行時に必ず失敗する。**
+#: 実測（biomni 0.0.8）では、これらが無いと literature / database /
+#: molecular_biology が丸ごと import できず、query_pubmed すら呼べない。
+TOOL_DEPENDENCIES: tuple[Dependency, ...] = (
+    Dependency("Bio", "biopython", "database / molecular_biology（配列・BLAST 系）"),
+    Dependency("bs4", "beautifulsoup4", "literature（HTML 解析）"),
+    Dependency("PyPDF2", "PyPDF2", "literature（PDF 抽出）"),
+    Dependency("googlesearch", "googlesearch-python", "literature（Web 検索。ポリシーでは拒否ツール）"),
+)
+
+#: 重いので既定では入れないもの。使いたい人向けに理由を明示する
+OPTIONAL_TOOL_DEPENDENCIES: tuple[Dependency, ...] = (
+    Dependency("torch", "torch", "genetics モジュール（数 GB）"),
+    Dependency("esm", "fair-esm", "genomics モジュール（タンパク質言語モデル）"),
+)
+
 
 def missing_dependencies(
     group: tuple[Dependency, ...] = AGENT_DEPENDENCIES,
@@ -76,9 +93,16 @@ def install_hint(missing: list[Dependency]) -> str:
     return "pip install " + " ".join(sorted({d.package for d in missing}))
 
 
+#: 使える LLM プロバイダ
+PROVIDERS = ("ollama", "anthropic")
+
+
 class Settings(BaseModel):
     """プロセス全体の設定。ノートブックでも Web アプリでも同じものを使う。"""
 
+    #: "ollama"（ローカル完結）か "anthropic"（Claude API）。
+    #: anthropic を選ぶと質問文と実行結果が外部に出る。UI で明示すること。
+    provider: str = Field(default_factory=lambda: _env("HYPO_PROVIDER", "ollama"))
     model: str = Field(default_factory=lambda: _env("HYPO_MODEL", "qwen3:14b"))
     extractor_model: str = Field(default_factory=lambda: _env("HYPO_EXTRACTOR_MODEL", ""))
     ollama_base_url: str = Field(
@@ -113,14 +137,26 @@ class Settings(BaseModel):
     offline_mode: bool = Field(
         default_factory=lambda: _env("HYPO_OFFLINE_MODE", "false").lower() == "true"
     )
+    #: Claude API 用。未設定なら Claude はモデル一覧に出ない
+    anthropic_api_key: str = Field(default_factory=lambda: _env("ANTHROPIC_API_KEY", ""))
+    anthropic_base_url: str = Field(default_factory=lambda: _env("ANTHROPIC_BASE_URL", ""))
+    anthropic_max_tokens: int = Field(
+        default_factory=lambda: int(_env("HYPO_ANTHROPIC_MAX_TOKENS", "8192"))
+    )
     #: 常に True。商用限定の前提を設定で緩められないようにする（docs/design/05）
     commercial_mode: bool = True
+
+    @property
+    def is_local(self) -> bool:
+        """データがローカルから出ないか。"""
+        return self.provider == "ollama"
 
     def extractor_model_name(self) -> str:
         return self.extractor_model or self.model
 
     def to_run_config(self, policy_version: int = 0, biomni_version: str = "") -> RunConfig:
         return RunConfig(
+            provider=self.provider,
             model=self.model,
             temperature=self.temperature,
             num_ctx=self.num_ctx,
@@ -149,10 +185,11 @@ def apply_biomni_env(settings: Settings) -> dict[str, str]:
     Returns:
         設定した環境変数（検証・ログ用）。
     """
+    source = "Anthropic" if settings.provider == "anthropic" else "Ollama"
     env = {
         "BIOMNI_LLM": settings.model,
-        "BIOMNI_SOURCE": "Ollama",
-        "LLM_SOURCE": "Ollama",
+        "BIOMNI_SOURCE": source,
+        "LLM_SOURCE": source,
         "BIOMNI_PATH": settings.data_path,
         "BIOMNI_TIMEOUT_SECONDS": str(settings.timeout_seconds),
         "BIOMNI_COMMERCIAL_MODE": "true",
@@ -170,16 +207,19 @@ def assert_biomni_env(settings: Settings) -> None:
     """
     from biomni.config import default_config  # 遅延 import
 
+    expected_source = "Anthropic" if settings.provider == "anthropic" else "Ollama"
     problems = []
     if default_config.llm != settings.model:
         problems.append(f"default_config.llm={default_config.llm!r} (期待: {settings.model!r})")
-    if default_config.source != "Ollama":
-        problems.append(f"default_config.source={default_config.source!r} (期待: 'Ollama')")
+    if default_config.source != expected_source:
+        problems.append(
+            f"default_config.source={default_config.source!r} (期待: {expected_source!r})"
+        )
     if not default_config.commercial_mode:
         problems.append("default_config.commercial_mode=False (期待: True)")
     if problems:
         raise RuntimeError(
-            "biomni の default_config が Ollama / 商用モードを向いていません。"
+            "biomni の default_config が想定どおりを向いていません。"
             "biomni を import する前に apply_biomni_env() を呼んでください。\n  - "
             + "\n  - ".join(problems)
         )

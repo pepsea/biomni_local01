@@ -25,7 +25,7 @@ backend/app/ ──────>│   ここにロジックを集約する      
 | `question.py` | 調べたいことの入力・検査・プロンプト組み立て | 10 |
 | `config.py` | 設定と、**biomni の環境変数を import 前に適用する** `apply_biomni_env()` | 04 §4.3 |
 | `policy.py` | 商用限定のリソースポリシー。既定拒否 | 05 §5.2 |
-| `llm.py` | `ChatOllama` の構築（stop / num_ctx / base_url）と疎通確認 | 04 §4.1, §4.2 |
+| `llm.py` | LLM の構築（Ollama / Claude API）、stop・num_ctx・トークンストリーム | 04 §4.1, 11 |
 | `models.py` | ローカルモデルの探索・ライセンス判定・選択・num_ctx の丸め | 04 §4.7 |
 | `agent_factory.py` | A1 の構築。**Ollama の落とし穴をすべてここに封じる** | 04 全体 |
 | `guard.py` | コード実行直前のポリシー検査（最後の砦） | 05 §5.2 強制ポイント 3 |
@@ -67,7 +67,7 @@ backend/app/ ──────>│   ここにロジックを集約する      
 | `backend/app/main.py` | FastAPI。HTTP と SSE の層に徹し、ドメインロジックを持たない |
 | `backend/app/worker.py` | ラン 1 本ごとに子プロセスを起こし `run_hypothesis()` を呼ぶ |
 | `backend/app/store.py` | sqlite3 に RunResult の JSON とイベントを保存 |
-| `backend/app/static/index.html` | 入力用の最小 UI（依存なしの 1 ファイル） |
+| `backend/app/static/index.html` | Web UI（依存なしの 1 ファイル）。回答 / 仮説 / 集めた情報 / トレース |
 
 ### 設計との差分（意図的なもの）
 

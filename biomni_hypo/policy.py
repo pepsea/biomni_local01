@@ -70,6 +70,7 @@ class ResourcePolicy:
     _model_deny_families: list[dict[str, Any]] = field(default_factory=list)
     _dataset_deny_reason: str = "許可リストに無いデータセット"
     _model_deny_reason: str = "許可リストに無いモデル"
+    _providers: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     # ------------------------------------------------------------------ load
 
@@ -106,6 +107,8 @@ class ResourcePolicy:
         pol._model_allow_families = list(models.get("allow_families") or [])
         pol._model_deny_families = list(models.get("deny_families") or [])
         pol._model_deny_reason = models.get("deny_reason_default", pol._model_deny_reason)
+
+        pol._providers = dict(raw.get("providers") or {})
         return pol
 
     # -------------------------------------------------------------- accessors
@@ -199,6 +202,28 @@ class ResourcePolicy:
                 )
 
         return Decision(allowed=False, reason=self._model_deny_reason, matched_by="default")
+
+    # ------------------------------------------------------------- providers
+
+    def providers(self) -> dict[str, dict[str, Any]]:
+        return dict(self._providers)
+
+    def provider(self, name: str) -> dict[str, Any]:
+        return dict(self._providers.get(name) or {})
+
+    def provider_models(self, name: str) -> list[dict[str, Any]]:
+        return list(self.provider(name).get("models") or [])
+
+    def is_local_provider(self, name: str) -> bool:
+        return bool(self.provider(name).get("local"))
+
+    def supports_temperature(self, provider: str, model: str) -> bool:
+        """そのモデルに temperature を送ってよいか。
+
+        Claude の 4.6 以降は temperature を受け付けず 400 を返す。
+        """
+        prefixes = self.provider(provider).get("no_temperature_prefixes") or []
+        return not any(model.startswith(p) for p in prefixes)
 
     def recommended_model_names(self) -> list[str]:
         return sorted(n for n, e in self._models.items() if e.get("recommended"))

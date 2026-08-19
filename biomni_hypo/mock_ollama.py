@@ -1,4 +1,4 @@
-"""検証用のモック Ollama サーバ.
+"""検証用のモック LLM サーバ（Ollama / Anthropic）.
 
 本物の Ollama が無い環境（CI、ネットワーク制限下）でも、
 **LLM に渡した設定が実際に HTTP リクエストへ乗るか**を確かめられるようにする。
@@ -7,6 +7,7 @@
   - `build_chat_ollama()` が stop / num_ctx / format を options に載せているか（§4.1）
   - `biomni.llm.get_llm(source="Ollama")` が stop を落としていること（§4.1 の不具合）
   - 応答を台本で与えて、A1 の ReAct ループと TracingRunner を通せること
+  - Claude API 側も同様（`/v1/messages`）。API キー無しで配線を確認できる
 
 検証できないこと: モデルが実際に指示に従うか。それは実機の notebooks/01 で見る。
 本番コードからは import しない。
@@ -100,6 +101,13 @@ class MockOllama:
                 self._record(body)
 
                 path = self.path.split("?")[0]
+                if path == "/v1/messages":
+                    content = mock._next_reply()
+                    if body.get("stream"):
+                        self._stream_anthropic(body.get("model", "mock"), content)
+                    else:
+                        self._json(_anthropic_message(body.get("model", "mock"), content))
+                    return
                 if path == "/api/show":
                     name = body.get("model") or body.get("name") or ""
                     self._json(_show_entry(name, mock.models))
@@ -114,18 +122,66 @@ class MockOllama:
                 else:
                     self._json(_chat_final(body.get("model", "mock"), content))
 
+            def _stream_anthropic(self, model: str, content: str) -> None:
+                """Anthropic Messages API の SSE 形式で返す。"""
+                events = [
+                    ("message_start", {"type": "message_start", "message": _anthropic_message(model, "")}),
+                    (
+                        "content_block_start",
+                        {
+                            "type": "content_block_start",
+                            "index": 0,
+                            "content_block": {"type": "text", "text": ""},
+                        },
+                    ),
+                ]
+                for piece in _split_for_stream(content):
+                    events.append(
+                        (
+                            "content_block_delta",
+                            {
+                                "type": "content_block_delta",
+                                "index": 0,
+                                "delta": {"type": "text_delta", "text": piece},
+                            },
+                        )
+                    )
+                events += [
+                    ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+                    (
+                        "message_delta",
+                        {
+                            "type": "message_delta",
+                            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                            "usage": {"output_tokens": 1},
+                        },
+                    ),
+                    ("message_stop", {"type": "message_stop"}),
+                ]
+                payload = "".join(
+                    f"event: {name}\ndata: {json.dumps(data)}\n\n" for name, data in events
+                ).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
             def _stream_chat(self, model: str, content: str) -> None:
+                # 本物と同じく小刻みに返す。トークンストリーミングの検証に必要
+                pieces = _split_for_stream(content)
                 chunks = [
                     json.dumps(
                         {
                             "model": model,
                             "created_at": "2024-01-01T00:00:00Z",
-                            "message": {"role": "assistant", "content": content},
+                            "message": {"role": "assistant", "content": piece},
                             "done": False,
                         }
-                    ),
-                    json.dumps(_chat_final(model, "")),
+                    )
+                    for piece in pieces
                 ]
+                chunks.append(json.dumps(_chat_final(model, "")))
                 payload = ("\n".join(chunks) + "\n").encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/x-ndjson")
@@ -145,6 +201,13 @@ class MockOllama:
             self._server.server_close()
         if self._thread is not None:
             self._thread.join(timeout=5)
+
+
+def _split_for_stream(content: str, size: int = 12) -> list[str]:
+    """本物の Ollama のように、内容を小刻みなチャンクに割る。"""
+    if not content:
+        return [""]
+    return [content[i : i + size] for i in range(0, len(content), size)]
 
 
 def _spec(entry: Any) -> tuple[str, int, int]:
@@ -194,6 +257,19 @@ def _show_entry(name: str, entries: list[Any]) -> dict[str, Any]:
             f"{family}.embedding_length": 5120,
         },
         "capabilities": ["completion", "tools"],
+    }
+
+
+def _anthropic_message(model: str, content: str) -> dict[str, Any]:
+    return {
+        "id": "msg_mock",
+        "type": "message",
+        "role": "assistant",
+        "model": model,
+        "content": [{"type": "text", "text": content}] if content else [],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 1, "output_tokens": 1},
     }
 
 

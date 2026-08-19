@@ -39,6 +39,8 @@ class TraceResult:
     stopped_reason: str = ""
     #: LLM の生出力に <observation> が現れた回数。0 でなければ stop が効いていない（AC-1）
     hallucinated_observations: int = 0
+    #: 実況で流したトークン数
+    streamed_tokens: int = 0
 
 
 class TracingRunner:
@@ -66,6 +68,7 @@ class TracingRunner:
         self.resources_considered: dict[str, list[str]] = {}
         self.stopped_reason = ""
         self.hallucinated_observations = 0
+        self.streamed_tokens = 0
 
     # ------------------------------------------------------------------ 実行
 
@@ -86,6 +89,10 @@ class TracingRunner:
             self.resources_considered = self._select_resources(question)
             if on_event:
                 on_event("resources_selected", self.resources_considered)
+
+        # 生成トークンの実況。A1 は invoke() を同期で呼ぶが、ChatOllama は内部で
+        # ストリーミングしているので、コールバック経由でトークンが取れる。
+        self._attach_token_stream(on_event)
 
         inputs = {"messages": [_human_message(question)], "next_step": None}
         config = {
@@ -119,9 +126,27 @@ class TracingRunner:
                     self.stopped_reason = f"wallclock_limit({settings.wallclock_limit_sec}s) に到達"
                     break
 
+        self._detach_token_stream()
         self._attach_artifacts()
         if on_event:
             on_event("trace_done", {"stopped_reason": self.stopped_reason})
+
+    def _attach_token_stream(self, on_event: Callable[[str, dict[str, Any]], None] | None) -> None:
+        handler = getattr(self.bundle, "token_stream", None)
+        if handler is None or on_event is None:
+            return
+
+        def sink(kind: str, text: str) -> None:
+            if kind == "token":
+                self.streamed_tokens += 1
+            on_event("token", {"kind": kind, "text": text})
+
+        handler.sink = sink
+
+    def _detach_token_stream(self) -> None:
+        handler = getattr(self.bundle, "token_stream", None)
+        if handler is not None:
+            handler.sink = None
 
     def run(self, question: str, **kwargs: Any) -> TraceResult:
         """iter_steps を回しきって結果をまとめて返す（ノートブック向け）。"""
@@ -136,6 +161,7 @@ class TracingRunner:
             resources_considered=dict(self.resources_considered),
             stopped_reason=self.stopped_reason,
             hallucinated_observations=self.hallucinated_observations,
+            streamed_tokens=self.streamed_tokens,
         )
 
     # ------------------------------------------------------------------ 分類

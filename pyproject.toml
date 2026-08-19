@@ -20,9 +20,22 @@ agent = [
     "biomni>=0.0.8",
     "langchain-ollama>=0.2",
     "langchain-core>=0.3",
+    "langchain-anthropic>=0.3",
     # biomni 0.0.8 の pyproject が宣言していない実依存（A1 の import に必要）
     "pandas>=2.0",
     "langchain-openai>=0.2",
+    # ツールモジュールの実依存（これが無いとツールが 1 つも実行できない）
+    "biopython>=1.83",
+    "beautifulsoup4>=4.12",
+    "PyPDF2>=3.0",
+    # literature モジュールを import 可能にするため（ツール自体はポリシーで拒否）
+    "googlesearch-python>=1.2",
+]
+
+# 重い。genomics / genetics モジュールを使うときだけ
+heavy-tools = [
+    "torch>=2.0",
+    "fair-esm>=2.0",
 ]
 api = [
     "fastapi>=0.110",
