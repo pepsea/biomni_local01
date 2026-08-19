@@ -12,17 +12,46 @@ HTTP リクエストを観測して確認した内容。数値はすべて実測
 `biomni` の `pyproject.toml` が宣言している依存は `pydantic` / `langchain` / `python-dotenv` の 3 つだけだが、
 実際には `from biomni.agent import A1` の時点で追加のパッケージが要る。
 
+まっさらな仮想環境に `pip install biomni langchain-core langchain-ollama langchain-openai langgraph`
+だけを入れて実測したところ、**`from biomni.agent import A1` の時点で落ちる**。
+
 ```
 ModuleNotFoundError: No module named 'pandas'
+ModuleNotFoundError: No module named 'tqdm'
 ModuleNotFoundError: No module named 'langchain_openai'
 ```
+
+さらに A1 が import できても、ツールモジュールはそれぞれ別の依存を要求する（§4.0b）。
 
 さらに Ollama を使うには `langchain-ollama` が要る。これが無いと `biomni.llm.get_llm()` が
 `ImportError` を投げるが、**A1 の import 自体は通ってしまう**ため、環境チェックで
 `import biomni` だけを見ていると気付けない（notebook 01 で初めて落ちる）。
 
-本アプリの `requirements.txt` では `pandas` / `langchain-openai` / `langchain-ollama` を
-明示的にピン留めし、`biomni_hypo.config.missing_dependencies()` で不足を検出する。
+### 4.0b ツールモジュールの依存
+
+A1 が import できるようになっても、各ツールモジュールは独自の依存を持つ。
+足りないと**エージェントは案内されたツールを一つも実行できず、ループに陥る**（§5.2 で除外する）。
+
+| モジュール | 必要なもの | pip |
+| --- | --- | --- |
+| `literature` | `bs4`, `PyPDF2`, `googlesearch` | beautifulsoup4 PyPDF2 googlesearch-python |
+| `database` / `molecular_biology` | `Bio` | biopython |
+| `genomics` | `esm` | fair-esm（重い・任意） |
+| `genetics` | `torch` | torch（重い・任意） |
+
+`googlesearch-python` は、ポリシーで拒否している `search_google` のためだけに
+`literature` が import する。入れないと `query_pubmed` ごと失われるので、モジュールを
+通すために入れる。
+
+**検証済みの最小構成**（この 10 個で 11 モジュール中 9 が使える）:
+
+```bash
+pip install biomni langchain-core langchain-ollama langchain-openai langgraph \
+            pandas tqdm biopython beautifulsoup4 PyPDF2 googlesearch-python
+```
+
+本アプリの `requirements.txt` はこれを含んでおり、
+`biomni_hypo.config.missing_dependencies()` で不足を検出する。
 
 ```python
 from biomni_hypo.config import install_hint, missing_dependencies

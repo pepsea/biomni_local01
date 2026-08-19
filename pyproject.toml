@@ -23,6 +23,7 @@ agent = [
     "langchain-anthropic>=0.3",
     # biomni 0.0.8 の pyproject が宣言していない実依存（A1 の import に必要）
     "pandas>=2.0",
+    "tqdm>=4.66",
     "langchain-openai>=0.2",
     # ツールモジュールの実依存（これが無いとツールが 1 つも実行できない）
     "biopython>=1.83",

@@ -53,6 +53,7 @@ AGENT_DEPENDENCIES: tuple[Dependency, ...] = (
     Dependency("pandas", "pandas", "biomni が宣言していない実依存"),
     Dependency("langchain_openai", "langchain-openai", "biomni が宣言していない実依存"),
     Dependency("dotenv", "python-dotenv", "biomni の .env 読み込み"),
+    Dependency("tqdm", "tqdm", "biomni が宣言していない実依存"),
 )
 
 #: API サーバを動かすのに要るもの

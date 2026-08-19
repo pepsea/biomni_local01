@@ -16,6 +16,7 @@ langchain-anthropic>=0.3
 # biomni 0.0.8 が宣言していないが実際に必要な依存。
 # 入れないと `from biomni.agent import A1` が ModuleNotFoundError で落ちる
 pandas>=2.0
+tqdm>=4.66
 langchain-openai>=0.2
 
 # biomni のツールモジュールが必要とする依存。
