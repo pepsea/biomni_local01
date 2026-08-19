@@ -1,45 +1,87 @@
-# LLM が生成した任意コードを実行するため、ワーカーはコンテナに隔離する
+# 常駐させる構成。
+#
+#   docker compose up -d              起動（バックグラウンド）
+#   docker compose logs -f app        ログを追う
+#   docker compose ps                 状態
+#   docker compose down               停止（モデルとデータは残る）
+#
+# restart: unless-stopped なので、マシンを再起動しても Docker が上がれば
+# アプリも自動で戻る。明示的に down するまで動き続ける。
+#
+# LLM が生成した任意コードを実行するため、app は権限を絞ってある
 # （docs/design/02-architecture.md §2.6）。
+
 services:
   ollama:
     image: ollama/ollama:latest
+    container_name: biomni-ollama
+    restart: unless-stopped
     ports:
-      - "11434:11434"
+      - "127.0.0.1:11434:11434"     # ホストからも使えるが外部には出さない
     volumes:
       - ollama-models:/root/.ollama
     healthcheck:
-      test: ["CMD", "ollama", "list"]
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
       interval: 10s
       timeout: 5s
-      retries: 12
+      retries: 30
+      start_period: 20s
 
-  api:
+  # モデルを取ってくるだけの使い捨てサービス。取得済みなら即終了する。
+  # 初回は数 GB のダウンロードで時間がかかる。
+  ollama-pull:
+    image: ollama/ollama:latest
+    container_name: biomni-ollama-pull
+    restart: "no"
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      'ollama pull "${HYPO_MODEL:-qwen3:14b}" && echo "pull 完了: ${HYPO_MODEL:-qwen3:14b}"'
+
+  app:
     build: .
-    command: uvicorn backend.app.main:app --host 0.0.0.0 --port 8000
+    container_name: biomni-app
+    restart: unless-stopped
     ports:
       - "8000:8000"
     environment:
       OLLAMA_BASE_URL: http://ollama:11434
       BIOMNI_PATH: /app/data
       HYPO_WORKSPACE: /app/workspace
+      HYPO_POLICY_PATH: /app/config/resource_policy.yaml
+      HYPO_PROVIDER: "${HYPO_PROVIDER:-ollama}"
+      HYPO_MODEL: "${HYPO_MODEL:-qwen3:14b}"
+      BIOMNI_LLM: "${HYPO_MODEL:-qwen3:14b}"
       BIOMNI_SOURCE: Ollama
       LLM_SOURCE: Ollama
       BIOMNI_COMMERCIAL_MODE: "true"
+      HYPO_NUM_CTX: "${HYPO_NUM_CTX:-32768}"
+      # Claude API を使う場合だけ。ホストの環境変数か .env から渡る
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
     volumes:
-      - ./data:/app/data
-      - ./workspace:/app/workspace
-      - ./config:/app/config:ro
+      - ./data:/app/data                       # データレイク（再取得を避ける）
+      - ./workspace:/app/workspace             # ラン履歴・レポート
+      - ./config:/app/config:ro                # リソースポリシー
     depends_on:
       ollama:
         condition: service_healthy
-    # ワーカー子プロセスが LLM 生成コードを実行する。権限を絞る
-    user: "1000:1000"
-    cap_drop:
-      - ALL
+    # LLM 生成コードを実行するので権限を絞る
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
     mem_limit: 8g
     pids_limit: 512
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
 volumes:
   ollama-models:

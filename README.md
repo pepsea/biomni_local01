@@ -31,7 +31,21 @@ A1 の構築・ReAct ループ・ポリシーガード・パイプライン全�
 
 ## クイックスタート
 
-### いちばん簡単
+### いちばん簡単 — Docker で常駐させる
+
+Python の環境で悩みたくないならこれが確実です。イメージの中に Python は 1 つだけです。
+
+```bash
+make docker-up          # ビルドして常駐起動
+```
+
+http://localhost:8000 が開きます。初回はモデル取得（約 9GB）に時間がかかるので
+`make docker-logs` で進行を見てください。`restart: unless-stopped` なので、
+`make docker-down` するまで動き続けます（マシン再起動後も復帰します）。
+
+詳細は [12-docker.md](docs/design/12-docker.md)。
+
+### ホストに直接入れる
 
 ```bash
 bash scripts/setup_local.sh          # 最小構成（テストが通るところまで）
@@ -144,7 +158,7 @@ make up                      # または: bash scripts/start.sh
 | `make doctor` | **どの Python を使っているか診断**（依存が入らないとき） |
 | `bash scripts/start.sh --port 9000` | ポートを変える |
 | `bash scripts/start.sh --reload` | コード変更を自動反映（開発用） |
-| `docker compose up` | Ollama ごとコンテナで起動 |
+| `make docker-up` | **Docker で常駐起動**（Ollama ごと。[12](docs/design/12-docker.md)） |
 
 **Ollama も Claude API も無くてもサーバは起動します**（モデルが選べないだけ）。
 `make check-env` で何が足りないか分かります。
@@ -243,6 +257,7 @@ docs/design/     設計書
 | [09-implementation](docs/design/09-implementation.md) | 実装の構成（ノートブックと Web アプリの関係） |
 | [10-question-input](docs/design/10-question-input.md) | **調べたいことの入力**（構造化・検査・プロンプト組み立て） |
 | [11-realtime-and-providers](docs/design/11-realtime-and-providers.md) | **リアルタイム出力**とプロバイダ選択（Ollama / Claude API） |
+| [12-docker](docs/design/12-docker.md) | **Docker で常駐**させる |
 
 ## 設計の要点
 
