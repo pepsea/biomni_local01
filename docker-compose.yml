@@ -4,6 +4,10 @@
 #
 # ポートを変えるには .env に:  APP_PORT=9000
 # 外部に出したくないなら:      APP_BIND=127.0.0.1
+#
+# LLM プロバイダの切り替え（.env の COMPOSE_PROFILES）:
+#   COMPOSE_PROFILES=ollama   ローカル実行。ollama コンテナも起動する（既定）
+#   COMPOSE_PROFILES=         Claude API のみ。ollama は起動しない（モデル取得も走らない）
 #   docker compose logs -f app        ログを追う
 #   docker compose ps                 状態
 #   docker compose down               停止（モデルとデータは残る）
@@ -15,9 +19,11 @@
 # （docs/design/02-architecture.md §2.6）。
 
 services:
+  # Claude API だけで使うなら不要。COMPOSE_PROFILES を空にすると起動しない
   ollama:
     image: ollama/ollama:latest
     container_name: biomni-ollama
+    profiles: ["ollama"]
     restart: unless-stopped
     ports:
       # 既定はループバックのみ。外部には出さない
@@ -39,6 +45,7 @@ services:
   ollama-pull:
     image: ollama/ollama:latest
     container_name: biomni-ollama-pull
+    profiles: ["ollama"]
     restart: "no"
     depends_on:
       ollama:
@@ -70,8 +77,9 @@ services:
       HYPO_PROVIDER: "${HYPO_PROVIDER:-ollama}"
       HYPO_MODEL: "${HYPO_MODEL:-qwen3:14b}"
       BIOMNI_LLM: "${HYPO_MODEL:-qwen3:14b}"
-      BIOMNI_SOURCE: Ollama
-      LLM_SOURCE: Ollama
+      # biomni の default_config が向く先。provider に合わせる（docs/design/04 §4.3）
+      BIOMNI_SOURCE: "${BIOMNI_SOURCE:-Ollama}"
+      LLM_SOURCE: "${BIOMNI_SOURCE:-Ollama}"
       BIOMNI_COMMERCIAL_MODE: "true"
       HYPO_NUM_CTX: "${HYPO_NUM_CTX:-32768}"
       # Claude API を使う場合だけ。ホストの環境変数か .env から渡る
@@ -86,6 +94,8 @@ services:
     depends_on:
       ollama:
         condition: service_healthy
+        # ollama プロファイルが無効（Claude API のみ）でも app は起動する
+        required: false
     # LLM 生成コードを実行するので権限を絞る
     security_opt:
       - no-new-privileges:true

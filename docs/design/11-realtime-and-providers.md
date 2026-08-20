@@ -84,6 +84,38 @@ sink はランの外では `None` にする。リソース検索など、ユー�
 - 抽出フェーズの `format`（JSON Schema 強制）は Ollama 固有。Claude ではプロンプトの
   指示に任せる
 
+### 切り替え方
+
+揃える必要がある変数が 4 つあり、手で書くと食い違う。スクリプトを使う。
+
+```bash
+bash scripts/set-provider.sh claude --key sk-ant-... --port 8003
+bash scripts/set-provider.sh ollama --model qwen3:14b
+```
+
+| 変数 | Ollama | Claude API |
+| --- | --- | --- |
+| `HYPO_PROVIDER` | `ollama` | `anthropic` |
+| `HYPO_MODEL` / `BIOMNI_LLM` | `qwen3:14b` | `claude-opus-5` |
+| `BIOMNI_SOURCE` | `Ollama` | `Anthropic` ← §4.3。忘れると DB ツールが誤った方を向く |
+| `COMPOSE_PROFILES` | `ollama` | （空）← ollama コンテナを起動しない |
+
+Docker では `COMPOSE_PROFILES` を空にすると `ollama` / `ollama-pull` が
+起動しない（9GB のモデル取得が走らない）。`app` の `depends_on` は
+`required: false` にしてあるので、ollama が居なくても起動する。
+
+### `.env` の読み込み
+
+`biomni_hypo.config` が import 時にリポジトリの `.env` を読む
+（`load_dotenv_file()`）。**既にプロセス環境にある値は上書きしない**ので、
+Docker Compose や systemd が渡した値が `.env` より強い。
+
+python-dotenv には依存していない。軽量インストールでも `.env` が効くようにするため。
+
+> テスト実行時は `HYPO_SKIP_DOTENV=1`（`tests/conftest.py` が設定）で読み込みを止める。
+> biomni 自身も import 時に `load_dotenv(".env")` を実行するので、
+> conftest はセッション開始時に biomni を先に import してから環境変数を落としている。
+
 ### モデル ID
 
 `config/resource_policy.yaml` の `providers.anthropic.models` に列挙する。

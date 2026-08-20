@@ -50,6 +50,19 @@ Docker + systemd で常設します。マシンを再起動しても自動で復
 ポートを変えるには `.env` に `APP_PORT=9000` と書いて `make docker-rebuild`。
 外部に出したくないなら `APP_BIND=127.0.0.1` も足します。
 
+### Claude API を使う
+
+```bash
+bash scripts/set-provider.sh claude --key sk-ant-... --port 8003
+make docker-rebuild        # Docker の場合。非 Docker なら bash scripts/start.sh
+```
+
+`HYPO_PROVIDER` / `HYPO_MODEL` / `BIOMNI_SOURCE` / `COMPOSE_PROFILES` の
+4 つを揃えて書き換えます（手で書くと食い違いやすい箇所です）。
+`COMPOSE_PROFILES` が空になるので、**Ollama コンテナは起動せず 9GB のモデル取得も走りません**。
+
+Ollama に戻すときは `bash scripts/set-provider.sh ollama`。
+
 ### 手元で Docker だけ動かす
 
 Python の環境で悩みたくないならこれが確実です。イメージの中に Python は 1 つだけです。

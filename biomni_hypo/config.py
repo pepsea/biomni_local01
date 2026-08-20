@@ -20,6 +20,54 @@ from biomni_hypo.schemas import RunConfig
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
+def load_dotenv_file(path: Path | None = None) -> dict[str, str]:
+    """リポジトリの .env を環境変数に読み込む.
+
+    **既にプロセス環境にある値は上書きしない。** Docker Compose や systemd が
+    渡した値が .env より強い、という順序にするため。
+
+    python-dotenv に依存しない。軽量インストール（pydantic / pyyaml / requests
+    だけ）でも .env が効くようにしたいため。
+
+    Returns:
+        実際に設定したキーと値。
+    """
+    if path is None:
+        if os.getenv("HYPO_SKIP_DOTENV"):
+            # テストや CI で、開発者の .env に結果を左右されないようにするための逃げ道。
+            # 明示的にパスを渡された場合は対象外（テストから直接呼べるように）
+            return {}
+        path = REPO_ROOT / ".env"
+    applied: dict[str, str] = {}
+    if not path.is_file():
+        return applied
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return applied
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if key.startswith("export "):
+            key = key[len("export ") :].strip()
+        if not key or key in os.environ:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        os.environ[key] = value
+        applied[key] = value
+    return applied
+
+
+#: import 時に読む。Settings の default_factory が os.getenv を見るので、
+#: Settings() が作られる前に済ませておく必要がある。
+DOTENV_APPLIED = load_dotenv_file()
+
+
 def _env(name: str, default: str) -> str:
     v = os.getenv(name)
     return v if v not in (None, "") else default

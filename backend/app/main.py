@@ -209,10 +209,15 @@ async def health() -> dict[str, Any]:
 @app.get("/api/providers")
 async def providers() -> dict[str, Any]:
     """使える LLM プロバイダ。ローカル完結かどうかを明示する。"""
+    catalog = _catalog()
     out = []
     for name, entry in POLICY.providers().items():
         needs = entry.get("requires_env", "")
-        ready = True if entry.get("local") else bool(getattr(SETTINGS, "anthropic_api_key", ""))
+        if entry.get("local"):
+            # ローカルは「Ollama に到達できるか」が準備完了の条件
+            ready = catalog.reachable
+        else:
+            ready = bool(getattr(SETTINGS, "anthropic_api_key", ""))
         out.append(
             {
                 "name": name,

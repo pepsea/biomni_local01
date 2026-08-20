@@ -290,3 +290,20 @@ def test_index_page_has_answer_and_live_sections(client):
     assert 'id="tab-sources"' in html
     assert 'addEventListener("token"' in html   # リアルタイム表示
     assert 'id="drawer"' in html                # 根拠ドロワー
+
+
+def test_providers_readiness_reflects_reality(client_with_ollama):
+    """ローカルは Ollama への到達性、クラウドは API キーの有無で判定する。"""
+    client, _mock = client_with_ollama
+    by_name = {p["name"]: p for p in client.get("/api/providers").json()["providers"]}
+    assert by_name["ollama"]["ready"] is True          # モック Ollama に到達できる
+    assert by_name["anthropic"]["ready"] is False      # API キー未設定
+
+
+def test_providers_local_not_ready_when_ollama_is_down(client, monkeypatch):
+    settings = main.SETTINGS.model_copy(deep=True)
+    settings.ollama_base_url = "http://127.0.0.1:1"
+    monkeypatch.setattr(main, "SETTINGS", settings)
+    monkeypatch.setattr(main, "_model_catalog", None)
+    by_name = {p["name"]: p for p in client.get("/api/providers").json()["providers"]}
+    assert by_name["ollama"]["ready"] is False
