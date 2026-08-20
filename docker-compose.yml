@@ -7,7 +7,10 @@
 #
 # LLM プロバイダの切り替え（.env の COMPOSE_PROFILES）:
 #   COMPOSE_PROFILES=ollama   ローカル実行。ollama コンテナも起動する（既定）
-#   COMPOSE_PROFILES=         Claude API のみ。ollama は起動しない（モデル取得も走らない）
+#   COMPOSE_PROFILES=         ollama コンテナを起動しない
+#                             - Claude API のみで使う場合
+#                             - ホストに入れた Ollama を使う場合
+#                               （bash scripts/use-host-ollama.sh）
 #   docker compose logs -f app        ログを追う
 #   docker compose ps                 状態
 #   docker compose down               停止（モデルとデータは残る）
@@ -87,6 +90,10 @@ services:
     env_file:
       - path: .env
         required: false
+    # ホストに直接入れた Ollama を使う場合の名前解決（Linux で必要）。
+    # OLLAMA_BASE_URL=http://host.docker.internal:11434 と組み合わせる
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./data:/app/data                       # データレイク（再取得を避ける）
       - ./workspace:/app/workspace             # ラン履歴・レポート

@@ -127,7 +127,64 @@ runtime : python:3.11-slim + curl（healthcheck 用） + /opt/venv をコピー
 依存の充足状況と使えるモデルまで見ているので、`docker compose ps` の
 `healthy` が「実際に使える状態」とほぼ一致する。
 
-## 12.10 検証状況
+## 12.10 ポートが衝突するとき
+
+```
+Error response from daemon: ports are not available:
+exposing port TCP 127.0.0.1:11434 -> ...: bind: address already in use
+```
+
+**ホストに直接入れた Ollama が既に 11434 を使っている**のに、compose が
+Ollama コンテナも立てようとしたときに出る。`make docker-check` で起動前に分かる。
+
+```bash
+make docker-check          # 誰がそのポートを使っているかまで出る
+```
+
+対処は 3 つ。
+
+### (A) ホストの Ollama をそのまま使う（おすすめ）
+
+コンテナを二重に立てない。モデルの再取得も起きない。
+
+```bash
+bash scripts/use-host-ollama.sh
+make docker-rebuild
+```
+
+`COMPOSE_PROFILES` を空にして ollama コンテナを止め、
+`OLLAMA_BASE_URL=http://host.docker.internal:11434` を設定する。
+Linux でこの名前を解決するために、compose の app に
+`extra_hosts: ["host.docker.internal:host-gateway"]` を入れてある。
+
+### (B) ホストの Ollama を止めて、コンテナ版に寄せる
+
+```bash
+sudo systemctl stop ollama     # または起動中のプロセスを終了
+sudo systemctl disable ollama  # 自動起動も切るなら
+make docker-up
+```
+
+モデルはコンテナ側のボリュームに取り直しになる（数 GB）。
+
+### (C) コンテナ版を別ポートにする
+
+```bash
+echo "OLLAMA_PORT=11435" >> .env
+make docker-up
+```
+
+ホストの Ollama と併存する。アプリはコンテナ側を使う。
+
+### アプリ側のポートが衝突する場合
+
+同じく `make docker-check` で分かる。`.env` の `APP_PORT` を変える。
+
+```bash
+echo "APP_PORT=8003" >> .env && make docker-rebuild
+```
+
+## 12.11 検証状況
 
 このリポジトリの CI 環境では Docker デーモンが使えないため、
 **`docker compose config` による構文検証までしか行っていない**。

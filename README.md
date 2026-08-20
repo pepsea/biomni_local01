@@ -63,6 +63,22 @@ make docker-rebuild        # Docker の場合。非 Docker なら bash scripts/s
 
 Ollama に戻すときは `bash scripts/set-provider.sh ollama`。
 
+### ポートが衝突するとき
+
+```
+ports are not available: ... bind: address already in use
+```
+
+ホストに直接入れた Ollama が 11434 を使っているのに、コンテナ版も立てようとした場合です。
+
+```bash
+make docker-check                    # 誰が使っているかまで出る
+bash scripts/use-host-ollama.sh      # ホストの Ollama をそのまま使う（おすすめ）
+make docker-rebuild
+```
+
+詳細は [12-docker.md §12.10](docs/design/12-docker.md)。
+
 ### 手元で Docker だけ動かす
 
 Python の環境で悩みたくないならこれが確実です。イメージの中に Python は 1 つだけです。

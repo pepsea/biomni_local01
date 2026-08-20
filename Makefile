@@ -1,5 +1,5 @@
 .PHONY: help install install-min test lint notebook up api check-env doctor models fetch check \
-	docker-up docker-down docker-logs docker-ps docker-rebuild \
+	docker-up docker-down docker-logs docker-ps docker-rebuild docker-check \
 	service-install service-status service-logs service-update service-uninstall
 
 help:
@@ -22,6 +22,7 @@ help:
 	@echo "docker-ps      状態を見る"
 	@echo "docker-down    停止（モデルとデータは残る）"
 	@echo "docker-rebuild コード変更を反映して再起動"
+	@echo "docker-check   起動前チェックだけ（ポート衝突など）"
 	@echo ""
 	@echo "-- Linux に常設（systemd）--"
 	@echo "service-install   常設する（Docker + systemd）"
@@ -75,11 +76,15 @@ APP_PORT := $(if $(APP_PORT),$(APP_PORT),8000)
 
 docker-up:
 	mkdir -p data workspace
+	bash scripts/docker-preflight.sh
 	docker compose up -d --build
 	@echo ""
 	@echo "起動しました。http://localhost:$(APP_PORT)"
 	@echo "ポートを変えるには .env に  APP_PORT=9000  を書いて make docker-rebuild"
 	@echo "初回はモデル取得に時間がかかります:  make docker-logs"
+
+docker-check:
+	bash scripts/docker-preflight.sh
 
 docker-logs:
 	docker compose logs -f app ollama-pull
@@ -91,6 +96,7 @@ docker-down:
 	docker compose down
 
 docker-rebuild:
+	bash scripts/docker-preflight.sh
 	docker compose up -d --build app
 
 # ---- Linux に常設（systemd + Docker）----------------------------------------
