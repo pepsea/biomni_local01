@@ -347,21 +347,43 @@ _JA_LABELS = {
     "data": "ユーザー提供データ",
 }
 
-_EN_RULES = """
+#: 出力形式の再掲。A1 のシステムプロンプトにも書いてあるが、それは会話の先頭にあり、
+#: 手数が増えるほど遠ざかる。指示追従性の低いローカルモデルは平文の計画だけを返して
+#: しまい、biomni の generate ノードが「タグが無い」と差し戻して 2 回で打ち切る
+#: （docs/design/16 §16.1）。毎回のユーザーメッセージ末尾に置いて近くに保つ。
+#: タグはリテラルなので日本語版でも英語のまま出す。
+_FORMAT_REMINDER = """
+Output format (required, every single turn):
+- Write your reasoning first, then EXACTLY ONE of the following tags.
+- To run code:  <execute>...python code...</execute>
+- To finish:    <solution>...final answer...</solution>
+- A reply containing neither tag is discarded. Never write a plan without an <execute> block.
+- Never write <observation> yourself; it is filled in for you.
+""".strip()
+
+_EN_RULES = (
+    """
 Rules:
 - Ground every claim in data you actually retrieved or computed in this session.
 - Prefer querying public databases and the local data lake over recalling facts from memory.
 - When you cite a paper or a database record, make sure the identifier appears in the output of code you ran.
 - Report contradicting evidence as well; do not only collect support.
 """.strip()
+    + "\n\n"
+    + _FORMAT_REMINDER
+)
 
-_JA_RULES = """
+_JA_RULES = (
+    """
 守ること:
 - 主張は、このセッションで実際に取得・計算した結果に基づかせること。
 - 記憶から答えず、公共データベースとローカルのデータレイクを実際に引くこと。
 - 文献や DB レコードを引くときは、その識別子が実行結果に現れていること。
 - 支持する根拠だけでなく、反証する根拠も報告すること。
 """.strip()
+    + "\n\n"
+    + _FORMAT_REMINDER
+)
 
 
 def _en_hypothesis(q: ResearchQuestion) -> str:

@@ -7,8 +7,10 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
+import queue as queue_mod
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -18,7 +20,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from backend.app.store import RunStore
-from backend.app.worker import spawn
+from backend.app.worker import spawn, terminate_tree
 from biomni_hypo.config import (
     AGENT_DEPENDENCIES,
     Settings,
@@ -61,6 +63,9 @@ STORE = RunStore(Path(SETTINGS.workspace_path) / "runs.sqlite3")
 
 #: モデル一覧のキャッシュ（/api/tags と /api/show を毎回叩かない）
 _model_catalog: Any = None
+
+#: 停止を要求されたラン。_drain が状態を上書きしないようにするため
+_cancelled: set[str] = set()
 
 #: run_id -> 購読者の asyncio.Queue 群
 _subscribers: dict[str, set[asyncio.Queue]] = {}
@@ -147,11 +152,24 @@ async def _publish(run_id: str, kind: str, payload: dict[str, Any]) -> None:
 
 
 async def _drain(run_id: str, proc: Any, mp_queue: Any) -> None:
-    """子プロセスの multiprocessing.Queue を asyncio 側へ吸い上げる。"""
+    """子プロセスの multiprocessing.Queue を asyncio 側へ吸い上げる。
+
+    **タイムアウト付きで待つこと。** ブロッキングの get だと、停止や異常終了で
+    子プロセスが _eof を送らずに死んだときに永久に待ち続け、
+    ラン状態が "running" のまま残って次のランが受け付けられなくなる。
+    """
     loop = asyncio.get_running_loop()
     try:
         while True:
-            msg = await loop.run_in_executor(None, mp_queue.get)
+            try:
+                msg = await loop.run_in_executor(
+                    None, functools.partial(mp_queue.get, True, 1.0)
+                )
+            except queue_mod.Empty:
+                if not proc.is_alive():
+                    # 子が死んだ。取りこぼしが無いか一度だけ確認して抜ける
+                    break
+                continue
             kind = msg["kind"]
             if kind == "_eof":
                 break
@@ -162,17 +180,18 @@ async def _drain(run_id: str, proc: Any, mp_queue: Any) -> None:
             else:
                 await _publish(run_id, kind, msg["payload"])
     finally:
-        proc.join(timeout=10)
-        if proc.is_alive():  # pragma: no cover - 異常系
-            proc.terminate()
+        terminate_tree(proc, grace=5.0)
+        cancelled = run_id in _cancelled
         run = STORE.get(run_id)
         if run and run.status == "running":
-            run.status = "failed"
-            run.error = run.error or "ワーカーが結果を返さずに終了しました"
+            run.status = "cancelled" if cancelled else "failed"
+            if not cancelled:
+                run.error = run.error or "ワーカーが結果を返さずに終了しました"
             run.finished_at = datetime.now(UTC)
             STORE.save(run)
         await _publish(run_id, "done", {"status": run.status if run else "failed"})
         _running.pop(run_id, None)
+        _cancelled.discard(run_id)
 
 
 # -------------------------------------------------------------- エンドポイント
@@ -365,8 +384,38 @@ async def create_run(req: RunRequest) -> dict[str, Any]:
 
 
 @app.get("/api/runs")
-async def list_runs(limit: int = 50) -> dict[str, Any]:
-    return {"runs": STORE.list(limit)}
+async def list_runs(
+    q: str = "",
+    provider: str = "",
+    model: str = "",
+    mode: str = "",
+    status: str = "",
+    organism: str = "",
+    since: str = "",
+    until: str = "",
+    limit: int = 50,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """過去の調査を条件で絞り込んで探す。
+
+    `q` は質問文・回答・仮説・対象・使用リソース・引用識別子を対象にした部分一致
+    （空白区切りで AND）。他は完全一致の絞り込み。
+    `facets` に絞り込みに使える値の一覧が入る（UI のプルダウン用）。
+    """
+    return STORE.search(
+        query=q,
+        filters={
+            "provider": provider,
+            "model": model,
+            "mode": mode,
+            "status": status,
+            "organism": organism,
+        },
+        since=since,
+        until=until,
+        limit=min(limit, 200),
+        offset=offset,
+    )
 
 
 @app.get("/api/runs/{run_id}")
@@ -387,17 +436,38 @@ async def get_report(run_id: str, format: str = "md") -> Any:
     return StreamingResponse(iter([to_markdown(run)]), media_type="text/markdown; charset=utf-8")
 
 
+@app.delete("/api/runs/{run_id}")
+async def delete_run(run_id: str) -> dict[str, Any]:
+    if run_id in _running:
+        raise HTTPException(409, {"error": "run_in_progress", "detail": "実行中のランは削除できません"})
+    if not STORE.delete(run_id):
+        raise HTTPException(404, "run not found")
+    return {"run_id": run_id, "deleted": True}
+
+
 @app.post("/api/runs/{run_id}/cancel")
 async def cancel_run(run_id: str) -> dict[str, Any]:
+    """実行中のランを止める。
+
+    子プロセスだけでなく、biomni が起こした孫プロセス（bash / R など）ごと止める。
+    状態の確定と done イベントの発行は _drain の finally が行う。
+    """
     proc = _running.get(run_id)
     if proc is None:
         raise HTTPException(404, "実行中のランではありません")
-    proc.terminate()
+
+    _cancelled.add(run_id)
     run = STORE.get(run_id)
     if run:
         run.status = "cancelled"
         run.finished_at = datetime.now(UTC)
         STORE.save(run)
+    await _publish(run_id, "status", {"status": "cancelled"})
+
+    # 実際の停止はブロックしうるのでスレッドに逃がす（イベントループを止めない）
+    await asyncio.get_running_loop().run_in_executor(
+        None, functools.partial(terminate_tree, proc, 5.0)
+    )
     return {"run_id": run_id, "status": "cancelled"}
 
 

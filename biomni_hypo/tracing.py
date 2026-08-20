@@ -30,6 +30,22 @@ SOLUTION_RE = re.compile(r"<solution>(.*?)</solution>", re.DOTALL)
 #: コード中のデータファイル参照
 FILE_REF_RE = re.compile(r"""['"]([\w./-]+\.(?:csv|tsv|parquet|pkl|json|obo|txt|h5ad|xlsx))['"]""")
 
+# biomni が「タグが無い」応答を検知したときに会話へ差し込む定型文（a1.py の generate ノード）。
+# これは LLM の思考ではなくフレームワークの差し戻しなので、think として出すと
+# 「モデルが何か考えている」ように見えてしまう。専用の種別に分ける。
+PARSE_RETRY_MARK = "there are no tags in the current response"
+PARSE_GIVEUP_MARK = "execution terminated due to repeated parsing errors"
+
+#: 差し戻しが起きたときに UI・ログへ出す原因と対処
+PARSE_ERROR_HINT = (
+    "モデルが <execute> / <solution> のどちらも出力しませんでした。"
+    "biomni は 2 回まで差し戻し、それでも直らなければランを打ち切ります。"
+    "よくある原因: (1) num_ctx が小さくシステムプロンプトが切り詰められている"
+    "（docs/design/04 §4.5）、(2) num_predict が小さく <think> の途中で生成が尽きる、"
+    "(3) 指示追従性の低いモデル。より大きな num_ctx / num_predict か、"
+    "別のモデル（qwen3:14b 以上、または Claude）を試してください。"
+)
+
 
 @dataclass
 class TraceResult:
@@ -39,6 +55,8 @@ class TraceResult:
     stopped_reason: str = ""
     #: LLM の生出力に <observation> が現れた回数。0 でなければ stop が効いていない（AC-1）
     hallucinated_observations: int = 0
+    #: biomni がタグ無し応答を差し戻した回数
+    parsing_errors: int = 0
     #: 実況で流したトークン数
     streamed_tokens: int = 0
 
@@ -68,6 +86,7 @@ class TracingRunner:
         self.resources_considered: dict[str, list[str]] = {}
         self.stopped_reason = ""
         self.hallucinated_observations = 0
+        self.parsing_errors = 0
         self.streamed_tokens = 0
 
     # ------------------------------------------------------------------ 実行
@@ -161,6 +180,7 @@ class TracingRunner:
             resources_considered=dict(self.resources_considered),
             stopped_reason=self.stopped_reason,
             hallucinated_observations=self.hallucinated_observations,
+            parsing_errors=self.parsing_errors,
             streamed_tokens=self.streamed_tokens,
         )
 
@@ -177,6 +197,10 @@ class TracingRunner:
 
         out: list[Step] = []
         idx = len(self.steps)
+
+        parse_step = self._classify_parse_error(text, idx, duration_ms)
+        if parse_step is not None:
+            return [parse_step]
 
         obs = OBSERVATION_RE.search(text)
         exe = EXECUTE_RE.search(text)
@@ -233,6 +257,45 @@ class TracingRunner:
 
         out.append(Step(idx=idx, kind=StepKind.THINK, text=_strip_tags(text), duration_ms=duration_ms))
         return out
+
+    def _classify_parse_error(self, text: str, idx: int, duration_ms: int) -> Step | None:
+        """biomni の差し戻し／打ち切りメッセージなら PARSING_ERROR にする。
+
+        これを think に混ぜると、画面には「0 think ＜英語の叱責文＞」とだけ出て、
+        何が起きたのか（モデルがタグを出せていない）が読み取れない。
+        """
+        low = text.lower()
+        if PARSE_GIVEUP_MARK in low:
+            self.parsing_errors += 1
+            self.stopped_reason = (
+                "モデルがタグ付きの応答を出せず、biomni が打ち切りました。" + PARSE_ERROR_HINT
+            )
+            log.error("biomni が解析エラーでランを打ち切りました。%s", PARSE_ERROR_HINT)
+            return Step(
+                idx=idx,
+                kind=StepKind.PARSING_ERROR,
+                text=self.stopped_reason,
+                error=text.strip(),
+                duration_ms=duration_ms,
+            )
+        if PARSE_RETRY_MARK in low:
+            self.parsing_errors += 1
+            log.warning(
+                "モデルがタグ無しで応答したため biomni が差し戻しました（%d 回目）。%s",
+                self.parsing_errors,
+                PARSE_ERROR_HINT,
+            )
+            return Step(
+                idx=idx,
+                kind=StepKind.PARSING_ERROR,
+                text=(
+                    f"タグの無い応答を biomni が差し戻しました（{self.parsing_errors} 回目）。"
+                    + PARSE_ERROR_HINT
+                ),
+                error=text.strip(),
+                duration_ms=duration_ms,
+            )
+        return None
 
     # -------------------------------------------------------------- 抽出補助
 

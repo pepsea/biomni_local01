@@ -23,6 +23,8 @@ class StepKind(StrEnum):
     OBSERVATION = "observation"
     SOLUTION = "solution"
     POLICY_BLOCKED = "policy_blocked"
+    #: モデルが <execute> / <solution> のどちらも出さず、biomni が差し戻した
+    PARSING_ERROR = "parsing_error"
     ERROR = "error"
 
 

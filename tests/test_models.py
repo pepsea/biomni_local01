@@ -304,3 +304,111 @@ def test_policy_knows_which_claude_models_reject_temperature(policy):
     assert not policy.supports_temperature("anthropic", "claude-sonnet-5")
     assert policy.supports_temperature("anthropic", "claude-haiku-4-5")
     assert policy.supports_temperature("ollama", "qwen3:14b")
+
+
+# ---------------------------------------- 両方（Ollama + Claude）を選べる設定
+# scripts/set-provider.sh both は ANTHROPIC_API_KEY を設定したまま
+# HYPO_PROVIDER をどちらにも置ける。そのときの挙動をここで固定する。
+
+
+def test_both_providers_are_offered_at_once(policy):
+    """キーがあり Ollama にも到達できるなら、両方が選択肢に並ぶ。"""
+    with MockOllama(models=LOCAL) as mock:
+        s = Settings()
+        s.ollama_base_url = mock.base_url
+        s.anthropic_api_key = "sk-test"
+        catalog = list_local_models(s, policy, fetch_context_length=False)
+
+    providers = {m.provider for m in catalog.selectable}
+    assert providers == {"ollama", "anthropic"}
+    assert any(m.local for m in catalog.selectable)
+    assert any(not m.local for m in catalog.selectable)
+
+
+@pytest.mark.parametrize(
+    ("provider", "wanted", "expected_provider"),
+    [
+        ("ollama", "qwen3:14b", "ollama"),
+        ("anthropic", "claude-opus-5", "anthropic"),
+        ("ollama", "claude-sonnet-5", "anthropic"),
+        ("anthropic", "qwen3:14b", "ollama"),
+    ],
+)
+def test_model_choice_wins_over_the_configured_provider(
+    policy, provider, wanted, expected_provider
+):
+    """既定のプロバイダが何であれ、選んだモデルのプロバイダで実行する。"""
+    with MockOllama(models=LOCAL) as mock:
+        s = Settings()
+        s.ollama_base_url = mock.base_url
+        s.anthropic_api_key = "sk-test"
+        s.provider = provider
+        apply_model_selection(s, policy, model=wanted)
+
+    assert s.provider == expected_provider
+    assert s.model == wanted
+
+
+def test_fallback_stays_within_the_configured_provider(policy):
+    """両方使える設定でも、既定が anthropic なら Ollama へは落ちない。
+
+    クラウドのモデルは size_bytes=0 なので、サイズだけで既定を決めると
+    必ずローカルに負ける。プロバイダで先に絞ること。
+    """
+    with MockOllama(models=LOCAL) as mock:
+        s = Settings()
+        s.ollama_base_url = mock.base_url
+        s.anthropic_api_key = "sk-test"
+        s.provider = "anthropic"
+        _catalog, notes = apply_model_selection(
+            s, policy, model="does-not-exist", strict=False
+        )
+
+    assert s.provider == "anthropic"
+    assert s.model.startswith("claude-")
+    assert any("does-not-exist" in n for n in notes)
+
+
+def test_fallback_stays_on_ollama_when_that_is_the_default(policy):
+    with MockOllama(models=LOCAL) as mock:
+        s = Settings()
+        s.ollama_base_url = mock.base_url
+        s.anthropic_api_key = "sk-test"
+        s.provider = "ollama"
+        apply_model_selection(s, policy, model="does-not-exist", strict=False)
+
+    assert s.provider == "ollama"
+    assert s.model == "qwen3:14b"
+
+
+def test_fallback_crosses_providers_when_it_has_to(policy):
+    """既定が ollama でも、Ollama が落ちていればクラウドへ逃がす。"""
+    s = Settings()
+    s.ollama_base_url = "http://127.0.0.1:1"
+    s.anthropic_api_key = "sk-test"
+    s.provider = "ollama"
+    apply_model_selection(s, policy, model="qwen3:14b", strict=False)
+    assert s.provider == "anthropic"
+    assert s.model.startswith("claude-")
+
+
+def test_ollama_run_does_not_route_biomni_to_anthropic(policy, monkeypatch):
+    """キーが .env にあっても、Ollama を選んだランは BIOMNI_SOURCE=Ollama。
+
+    biomni/tool/database.py は default_config を見るので、ここが Anthropic の
+    ままだと DB クエリツールだけ勝手に課金される。
+    """
+    from biomni_hypo.config import apply_biomni_env
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    with MockOllama(models=LOCAL) as mock:
+        s = Settings()
+        s.ollama_base_url = mock.base_url
+        s.anthropic_api_key = "sk-test"
+        s.provider = "anthropic"
+        apply_model_selection(s, policy, model="qwen3:14b")
+        env = apply_biomni_env(s)
+
+    assert env["BIOMNI_SOURCE"] == "Ollama"
+    assert env["LLM_SOURCE"] == "Ollama"
+    assert env["BIOMNI_LLM"] == "qwen3:14b"

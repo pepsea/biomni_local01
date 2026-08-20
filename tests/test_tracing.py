@@ -2,6 +2,8 @@ from biomni_hypo.config import Settings
 from biomni_hypo.fixtures import (
     TRACE_MESSAGES,
     TRACE_MESSAGES_HALLUCINATED,
+    TRACE_MESSAGES_PARSE_GIVEUP,
+    TRACE_MESSAGES_PARSE_RETRY,
     TRACE_MESSAGES_POLICY,
     FakeA1Module,
     fake_bundle,
@@ -113,3 +115,45 @@ def test_on_event_callback_receives_steps():
     kinds = [k for k, _ in events]
     assert kinds.count("step") == len(runner.steps)
     assert kinds[-1] == "trace_done"
+
+
+# ------------------------------------------- タグ無し応答（biomni の差し戻し）
+# 実測: 画面に「0 think Each response must include thinking process…」とだけ出て、
+# 何が起きたのか分からなかった。フレームワークの差し戻しは think ではない。
+
+
+def test_parse_retry_is_not_classified_as_think():
+    result, _ = _run(TRACE_MESSAGES_PARSE_RETRY)
+    kinds = [s.kind for s in result.steps]
+    assert StepKind.PARSING_ERROR in kinds
+    parse_steps = [s for s in result.steps if s.kind == StepKind.PARSING_ERROR]
+    assert len(parse_steps) == 1
+    # 英文の叱責をそのまま出さず、日本語で原因と対処を出す
+    assert "差し戻し" in parse_steps[0].text
+    assert "num_ctx" in parse_steps[0].text
+    # 原文も error に残す（何が起きたか追えるように）
+    assert "no tags in the current response" in parse_steps[0].error
+    assert result.parsing_errors == 1
+
+
+def test_run_recovers_after_a_retry():
+    """差し戻しのあとタグ付きで返せば、ランはそのまま続く。"""
+    result, _ = _run(TRACE_MESSAGES_PARSE_RETRY)
+    kinds = [s.kind for s in result.steps]
+    assert StepKind.EXECUTE in kinds
+    assert kinds[-1] == StepKind.SOLUTION
+    assert result.solution_text
+
+
+def test_repeated_parse_errors_set_a_stopped_reason():
+    result, _ = _run(TRACE_MESSAGES_PARSE_GIVEUP)
+    assert result.parsing_errors == 3  # 差し戻し 2 回 + 打ち切り 1 回
+    assert "打ち切り" in result.stopped_reason
+    assert "num_ctx" in result.stopped_reason
+    assert not result.solution_text
+
+
+def test_clean_run_reports_no_parsing_errors():
+    result, _ = _run(TRACE_MESSAGES)
+    assert result.parsing_errors == 0
+    assert all(s.kind != StepKind.PARSING_ERROR for s in result.steps)

@@ -12,16 +12,18 @@
 
 | レイヤ | 状態 |
 | --- | --- |
-| 設計 (`docs/design/`) | ✅ 01〜09 |
+| 設計 (`docs/design/`) | ✅ 01〜16 |
 | コアパッケージ (`biomni_hypo/`) | ✅ 実装済み |
 | 検証ノートブック (`notebooks/`) | ✅ 5 本 |
 | API + SSE (`backend/`) | ✅ 実装済み・実サーバで動作確認 |
-| テスト | ✅ **214 件**（うち 16 件は実物の biomni に対する統合テスト） |
+| テスト | ✅ **260 件**（うち 16 件は実物の biomni に対する統合テスト） |
 | モデル選択 | ✅ ローカルの Ollama を読み込んで選択（ライセンス判定つき） |
 | 質問入力 | ✅ 構造化入力・テンプレート・入力検査・プロンプト確認 |
 | Web UI | ✅ 依存なしの 1 ファイル（`/`）。回答・根拠・情報源・リアルタイムトレース |
 | リアルタイム出力 | ✅ トークン単位の実況（biomni 無改変） |
-| LLM プロバイダ | ✅ Ollama（ローカル）と Claude API を選択 |
+| LLM プロバイダ | ✅ Ollama（ローカル）と Claude API を**実行ごとに**選択 |
+| 調査履歴 | ✅ 条件込みで検索・絞り込み・再表示・削除 |
+| 実行の停止 | ✅ プロセスグループごと停止（孫プロセスまで） |
 
 **検証済み**: biomni 0.0.8 を実際にインストールし、モック Ollama サーバを相手に
 A1 の構築・ReAct ループ・ポリシーガード・パイプライン全体が動くことを確認した。
@@ -50,18 +52,50 @@ Docker + systemd で常設します。マシンを再起動しても自動で復
 ポートを変えるには `.env` に `APP_PORT=9000` と書いて `make docker-rebuild`。
 外部に出したくないなら `APP_BIND=127.0.0.1` も足します。
 
-### Claude API を使う
+### Ollama と Claude を両方使えるようにする（推奨）
 
 ```bash
-bash scripts/set-provider.sh claude --key sk-ant-... --port 8003
+bash scripts/set-provider.sh both --key sk-ant-... --port 8003
 make docker-rebuild        # Docker の場合。非 Docker なら bash scripts/start.sh
 ```
 
-`HYPO_PROVIDER` / `HYPO_MODEL` / `BIOMNI_SOURCE` / `COMPOSE_PROFILES` の
-4 つを揃えて書き換えます（手で書くと食い違いやすい箇所です）。
-`COMPOSE_PROFILES` が空になるので、**Ollama コンテナは起動せず 9GB のモデル取得も走りません**。
+これで画面のモデル選択に「ローカル (Ollama)」と「クラウド (Claude API)」が並び、
+**実行ごとに切り替えられます**。`.env` を書き換え直す必要はありません。
 
-Ollama に戻すときは `bash scripts/set-provider.sh ollama`。
+既定を Claude にしたいときは `--default claude`、モデルを指定するときは
+`--model qwen3:14b --claude-model claude-sonnet-5`。
+
+`ANTHROPIC_API_KEY` が環境にあっても、**Ollama を選んだ実行では biomni の
+`BIOMNI_SOURCE` が `Ollama` に張り替わります**。DB クエリツールだけが黙って
+Anthropic を呼ぶ事故は起きません（[15](docs/design/15-provider-switching.md) §15.2）。
+
+#### 片方だけ使う
+
+```bash
+bash scripts/set-provider.sh claude --key sk-ant-...   # Claude のみ
+bash scripts/set-provider.sh ollama --model qwen3:14b  # Ollama のみ
+```
+
+Claude のみにすると `COMPOSE_PROFILES` が空になり、
+**Ollama コンテナは起動せず 9GB のモデル取得も走りません**。
+
+いずれの場合も `HYPO_PROVIDER` / `HYPO_MODEL` / `BIOMNI_SOURCE` /
+`COMPOSE_PROFILES` の 4 つを揃えて書き換えます（手で書くと食い違いやすい箇所です）。
+
+> オフラインモード（`HYPO_OFFLINE_MODE=true`）はクラウドのモデルと併用できません。
+> クラウドを選ぶと画面側でもチェックが外れて無効になります。
+
+### 過去の調査を探す
+
+「履歴」タブから、**条件込みで**検索できます。
+
+- フリーワード（質問文・回答・仮説・使ったリソース名・PMID などの証拠識別子が対象）
+- プロバイダ / モデル / モード / 対象生物 / 状態 での絞り込み（選択肢は実データから生成）
+- カードには条件（モデル・モード・対象生物・文脈・注目点・オフライン）と
+  結果（仮説数・検証済/失敗の証拠数・手順数・所要時間）を併記
+- クリックすると回答・仮説・集めた情報・実行トレースをそのまま復元
+
+詳細は [14-search-and-history.md](docs/design/14-search-and-history.md)。
 
 ### ポートが衝突するとき
 
@@ -284,9 +318,10 @@ biomni_hypo/     共有コアパッケージ ← ノートブックも Web ア�
   models.py      モデルの探索（Ollama / Claude API）・ライセンス判定・選択
 notebooks/       検証ハーネス（ロジックは書かない。テストで強制）
 backend/app/     FastAPI + SSE + ラン実行ワーカー（子プロセス）+ 最小 UI
+  store.py       ラン保存と検索（条件も列に射影する）
 config/          resource_policy.yaml（商用限定・既定拒否）
 scripts/         質問の実行(ask)・モデル一覧・データセット取得・セットアップ
-tests/           214 件。うち 198 件は外部サービス不要
+tests/           260 件。うち 244 件は外部サービス不要
 docs/design/     設計書
 ```
 
@@ -307,6 +342,9 @@ docs/design/     設計書
 | [11-realtime-and-providers](docs/design/11-realtime-and-providers.md) | **リアルタイム出力**とプロバイダ選択（Ollama / Claude API） |
 | [12-docker](docs/design/12-docker.md) | **Docker で常駐**させる |
 | [13-linux-deployment](docs/design/13-linux-deployment.md) | **Linux に常設**する（systemd） |
+| [14-search-and-history](docs/design/14-search-and-history.md) | **調査履歴の検索**（条件込み） |
+| [15-provider-switching](docs/design/15-provider-switching.md) | **Ollama と Claude を両方**選べるようにする |
+| [16-parsing-errors](docs/design/16-parsing-errors.md) | **タグ無し応答**（"there are no tags..."）の原因と対処 |
 
 ## 設計の要点
 
@@ -332,6 +370,7 @@ docs/design/     設計書
 | §4.3 | `database.py` は `default_config.llm`（既定 Claude）を使う → DB ツールが外部 API を叩く | `apply_biomni_env()` を import 前に実行 |
 | §4.4 | `A1.__init__` がデータレイクを一括ダウンロードする | `expected_data_lake_files` を明示 |
 | §4.5 | **システムプロンプトだけで `num_ctx=32768` を超える**（絞り込みなしで 38.6k トークン） | モジュールプリセットで既定 16.5k に。占有率が 40% を超えたら警告 |
+| [§16](docs/design/16-parsing-errors.md) | タグの無い応答を 2 回で打ち切る。画面には英文の叱責が `think` として出るだけ | `PARSING_ERROR` に分類し、原因と対処を日本語で表示。プロンプト末尾に出力形式を再掲 |
 
 ## ライセンス
 

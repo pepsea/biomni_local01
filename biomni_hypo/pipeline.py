@@ -26,7 +26,7 @@ from biomni_hypo.schemas import (
     Step,
     StepKind,
 )
-from biomni_hypo.tracing import TracingRunner
+from biomni_hypo.tracing import PARSE_ERROR_HINT, TracingRunner
 from biomni_hypo.verifier import EvidenceVerifier
 
 log = logging.getLogger(__name__)
@@ -113,6 +113,11 @@ def run_hypothesis(
             "docs/design/04 §4.1 の LLM 差し替えが効いているか確認してください。",
             trace.hallucinated_observations,
         )
+    if trace.parsing_errors:
+        # モデルが <execute>/<solution> を出せていない。探索そのものが進んでいない
+        # 可能性が高いので、結果と一緒に必ず出す（docs/design/16 §16.2）。
+        result.extra["parsing_errors"] = trace.parsing_errors
+        result.extra["parsing_error_hint"] = PARSE_ERROR_HINT
 
     # --- 2. 抽出フェーズ ------------------------------------------------------
     emit("phase", {"phase": "extracting"})

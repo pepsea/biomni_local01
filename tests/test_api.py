@@ -307,3 +307,66 @@ def test_providers_local_not_ready_when_ollama_is_down(client, monkeypatch):
     monkeypatch.setattr(main, "_model_catalog", None)
     by_name = {p["name"]: p for p in client.get("/api/providers").json()["providers"]}
     assert by_name["ollama"]["ready"] is False
+
+
+class _FakeProc:
+    """停止テスト用。terminate_tree からは死んだように見える。"""
+
+    def __init__(self):
+        self.terminated = False
+        self.pid = None
+
+    def is_alive(self):
+        return not self.terminated
+
+    def terminate(self):
+        self.terminated = True
+
+    def kill(self):
+        self.terminated = True
+
+    def join(self, timeout=None):
+        return None
+
+
+def test_cancel_marks_the_run_and_frees_the_slot(client, monkeypatch):
+    """停止したら状態が cancelled になり、次のランを受け付けられること。"""
+    from biomni_hypo.schemas import RunResult
+
+    proc = _FakeProc()
+    main.STORE.save(RunResult(id="r_cancel", question="q", status="running"))
+    main._running["r_cancel"] = proc
+
+    r = client.post("/api/runs/r_cancel/cancel")
+
+    assert r.status_code == 200
+    assert r.json()["status"] == "cancelled"
+    assert proc.terminated, "プロセスを止めていない"
+    assert main.STORE.get("r_cancel").status == "cancelled"
+
+    main._running.pop("r_cancel", None)
+    main._cancelled.discard("r_cancel")
+
+
+def test_cancel_unknown_run(client):
+    assert client.post("/api/runs/r_nope/cancel").status_code == 404
+
+
+def test_cannot_delete_a_running_run(client):
+    from biomni_hypo.schemas import RunResult
+
+    main.STORE.save(RunResult(id="r_busy", question="q", status="running"))
+    main._running["r_busy"] = _FakeProc()
+    try:
+        assert client.delete("/api/runs/r_busy").status_code == 409
+    finally:
+        main._running.pop("r_busy", None)
+
+
+def test_delete_a_finished_run(client):
+    from biomni_hypo.schemas import RunResult
+
+    main.STORE.save(RunResult(id="r_old", question="q", status="succeeded"))
+    assert client.delete("/api/runs/r_old").status_code == 200
+    assert client.get("/api/runs/r_old").status_code == 404
+    assert client.delete("/api/runs/r_old").status_code == 404

@@ -314,6 +314,30 @@ TRACE_MESSAGES_HALLUCINATED = [
     "<solution>結論</solution>",
 ]
 
+#: モデルがタグ無しで応答し、biomni の generate ノードが差し戻したトレース。
+#: 実測の再現（docs/design/16 §16.1）。
+TRACE_MESSAGES_PARSE_RETRY = [
+    "1. [ ] Query PubMed for BRCA1\n2. [ ] Check GWAS Catalog\n3. [ ] Summarise",
+    "Each response must include thinking process followed by either <execute> or <solution> tag. "
+    "But there are no tags in the current response. Please follow the instruction, fix and "
+    "regenerate the response again.",
+    "GWAS Catalog を確認します。\n<execute>\nprint('ok')\n</execute>",
+    "<solution>結論</solution>",
+]
+
+#: 差し戻しが 2 回続いて biomni が打ち切ったトレース
+TRACE_MESSAGES_PARSE_GIVEUP = [
+    "まず PubMed を調べます。",
+    "Each response must include thinking process followed by either <execute> or <solution> tag. "
+    "But there are no tags in the current response. Please follow the instruction, fix and "
+    "regenerate the response again.",
+    "やはり PubMed から始めるのがよいと思います。",
+    "Each response must include thinking process followed by either <execute> or <solution> tag. "
+    "But there are no tags in the current response. Please follow the instruction, fix and "
+    "regenerate the response again.",
+    "Execution terminated due to repeated parsing errors. Please check your input and try again.",
+]
+
 #: ポリシー違反のコードを含むトレース
 TRACE_MESSAGES_POLICY = [
     "<execute>\nfrom biomni.tool.database import query_kegg\nprint(query_kegg('hsa04110'))\n</execute>",

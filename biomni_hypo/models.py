@@ -119,18 +119,28 @@ class ModelCatalog:
                 return m
         return None
 
-    def default(self, preferred: str = "") -> ModelOption | None:
+    def default(self, preferred: str = "", provider: str = "") -> ModelOption | None:
         """既定で選ぶべきモデル。
 
         1. preferred が選択可能ならそれ
-        2. 推奨タグの付いた選択可能モデルのうち、いちばん大きいもの
-        3. 選択可能モデルのうち、いちばん大きいもの
+        2. provider を指定していて、そのプロバイダに選択可能なものがあれば、その中から
+        3. 推奨タグの付いた選択可能モデルのうち、いちばん大きいもの
+        4. 選択可能モデルのうち、いちばん大きいもの
+
+        Ollama と Claude を両方使える設定（scripts/set-provider.sh both）では、
+        選択可能なモデルが両プロバイダに跨がる。size_bytes だけで選ぶと
+        クラウドのモデル（size_bytes=0）が必ず負けて、HYPO_PROVIDER=anthropic に
+        しても Ollama へ落ちてしまうので、provider で先に絞る。
         """
         if preferred:
             m = self.get(preferred)
             if m and m.installed and m.allowed:
                 return m
         pool = self.selectable
+        if provider:
+            narrowed = [m for m in pool if m.provider == provider]
+            if narrowed:
+                pool = narrowed
         if not pool:
             return None
         recommended = [m for m in pool if m.recommended]
@@ -359,7 +369,7 @@ def apply_model_selection(
     selected = catalog.get(wanted)
 
     if selected is None:
-        fallback = catalog.default()
+        fallback = catalog.default(provider=settings.provider)
         message = f"{wanted} はローカルにありません（ollama pull {wanted}）"
         if strict:
             hint = f" 使えるモデル: {', '.join(m.name for m in catalog.selectable) or 'なし'}"
@@ -371,13 +381,13 @@ def apply_model_selection(
         if strict:
             raise ModelNotAvailable(message)
         notes.append(message)
-        selected = catalog.default()
+        selected = catalog.default(provider=settings.provider)
     elif not selected.allowed:
         message = f"{wanted} は商用利用ポリシーにより使用できません: {selected.reason}"
         if strict:
             raise ModelNotAvailable(message)
         notes.append(message)
-        selected = catalog.default()
+        selected = catalog.default(provider=settings.provider)
 
     if selected is None:
         message = "使用できるモデルが 1 つもありません（ollama pull qwen3:14b）"
