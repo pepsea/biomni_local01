@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Biomni 仮説構築</title>
+<!-- 外部リクエストを増やさないため data URI。無いとブラウザが /favicon.ico を
+     取りに行って毎回 404 がコンソールに出る -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%F0%9F%A7%AC%3C/text%3E%3C/svg%3E">
 <style>
   :root {
     --bg:#fbfbfa; --fg:#1c1b1a; --muted:#6b6a67; --line:#e3e2df; --card:#fff;
@@ -211,7 +214,9 @@ function renderHints(hints) {
 }
 function showTab(name) {
   [...$("tabs").children].forEach(b => b.setAttribute("aria-pressed", b.dataset.tab === name));
-  ["answer","hyp","sources","trace"].forEach(t => $("tab-"+t).classList.toggle("on", t === name));
+  // タブ名をここに列挙しない。増やしたときに書き足し忘れると、
+  // ボタンは反応するのに中身が出ない状態になる（履歴タブで実際に起きた）。
+  document.querySelectorAll(".tabpage").forEach(p => p.classList.toggle("on", p.id === "tab-" + name));
 }
 $("tabs").onclick = e => {
   const b = e.target.closest("button"); if (!b) return;
