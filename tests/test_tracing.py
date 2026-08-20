@@ -1,15 +1,18 @@
+import pytest
+
 from biomni_hypo.config import Settings
 from biomni_hypo.fixtures import (
     TRACE_MESSAGES,
     TRACE_MESSAGES_HALLUCINATED,
     TRACE_MESSAGES_PARSE_GIVEUP,
     TRACE_MESSAGES_PARSE_RETRY,
+    TRACE_MESSAGES_PLANNED,
     TRACE_MESSAGES_POLICY,
     FakeA1Module,
     fake_bundle,
 )
 from biomni_hypo.schemas import StepKind
-from biomni_hypo.tracing import TracingRunner
+from biomni_hypo.tracing import TracingRunner, parse_plan
 
 
 def _run(messages, settings=None):
@@ -157,3 +160,107 @@ def test_clean_run_reports_no_parsing_errors():
     result, _ = _run(TRACE_MESSAGES)
     assert result.parsing_errors == 0
     assert all(s.kind != StepKind.PARSING_ERROR for s in result.steps)
+
+
+# --------------------------------------------------------------- 解析の計画
+# biomni は "Given a task, make a plan first." と指示し、
+# "Always show the updated plan after each step" と毎ターン再掲させる。
+# 素通しすると think に埋もれるので、独立した種別として拾う（docs/design/19）。
+
+
+def test_plan_is_its_own_step_kind():
+    result, _ = _run(TRACE_MESSAGES_PLANNED)
+    plans = [s for s in result.steps if s.kind == StepKind.PLAN]
+    assert plans, "計画が PLAN として拾えていない"
+    assert all(s.plan for s in plans), "PLAN ステップに中身が入っていない"
+
+
+def test_plan_checkboxes_are_parsed():
+    items = parse_plan(
+        "1. [ ] First step\n2. [✓] Second step (completed)\n3. [✗] Third (failed because X)"
+    )
+    assert [i.state for i in items] == ["todo", "done", "failed"]
+    assert items[1].text == "Second step"
+    assert "failed because X" in items[2].note
+
+
+@pytest.mark.parametrize("mark", ["✓", "✔", "x", "X", "☑"])
+def test_done_marks_vary_by_model(mark):
+    items = parse_plan(f"1. [{mark}] done step\n2. [ ] next step")
+    assert items[0].state == "done"
+
+
+@pytest.mark.parametrize("mark", ["✗", "×", "-", "!"])
+def test_failure_marks_vary_by_model(mark):
+    items = parse_plan(f"1. [{mark}] broken step\n2. [ ] next step")
+    assert items[0].state == "failed"
+
+
+def test_a_single_checkbox_line_is_not_a_plan():
+    """1 行だけの箇条書きを計画と呼ばない。"""
+    assert len(parse_plan("1. [ ] 何か")) == 1  # パースはできるが
+    result, runner = _run(["1. [ ] 何か\n<execute>\nprint(1)\n</execute>", "<solution>x</solution>"])
+    assert not [s for s in result.steps if s.kind == StepKind.PLAN]
+
+
+def test_the_latest_plan_wins():
+    """毎ターン再掲されるので、最後の状態が残ること。"""
+    result, _ = _run(TRACE_MESSAGES_PLANNED)
+    assert [i.state for i in result.plan] == ["done", "failed", "done"]
+    assert result.plan[1].note, "失敗理由が落ちている"
+
+
+def test_the_final_plan_update_before_a_solution_is_kept():
+    """最終ターンの計画を取りこぼさない。
+
+    ここを飛ばすと「最後に何が終わって何が失敗したか」が残らない。
+    """
+    result, _ = _run(TRACE_MESSAGES_PLANNED)
+    kinds = [s.kind for s in result.steps]
+    assert kinds[-2] == StepKind.PLAN and kinds[-1] == StepKind.SOLUTION
+
+
+def test_repeating_the_same_plan_does_not_add_a_step():
+    """進捗が変わらない再掲でステップを水増ししない。"""
+    plan = "1. [ ] a\n2. [ ] b\n"
+    result, _ = _run([
+        plan + "<execute>\nprint(1)\n</execute>",
+        "<observation>ok</observation>",
+        plan + "<execute>\nprint(2)\n</execute>",
+        "<solution>done</solution>",
+    ])
+    assert len([s for s in result.steps if s.kind == StepKind.PLAN]) == 1
+
+
+def test_reordering_the_plan_counts_as_a_revision():
+    result, _ = _run([
+        "1. [ ] a\n2. [ ] b\n<execute>\nprint(1)\n</execute>",
+        "<observation>ok</observation>",
+        "1. [ ] a\n2. [ ] c\n3. [ ] d\n<execute>\nprint(2)\n</execute>",
+        "<solution>done</solution>",
+    ])
+    assert result.plan_revisions == 1
+
+
+def test_ticking_a_box_is_progress_not_a_revision():
+    result, _ = _run([
+        "1. [ ] a\n2. [ ] b\n<execute>\nprint(1)\n</execute>",
+        "<observation>ok</observation>",
+        "1. [✓] a\n2. [ ] b\n<execute>\nprint(2)\n</execute>",
+        "<solution>done</solution>",
+    ])
+    assert result.plan_revisions == 0
+    assert result.plan[0].state == "done"
+
+
+def test_prose_around_the_plan_is_kept_as_think():
+    result, _ = _run(TRACE_MESSAGES_PLANNED)
+    thinks = [s for s in result.steps if s.kind == StepKind.THINK]
+    assert any("計画を立てます" in s.text for s in thinks)
+    assert all("[ ]" not in s.text for s in thinks), "計画の行が think に混ざっている"
+
+
+def test_a_run_without_a_plan_is_still_fine():
+    result, _ = _run(TRACE_MESSAGES)
+    assert not result.plan
+    assert not [s for s in result.steps if s.kind == StepKind.PLAN]

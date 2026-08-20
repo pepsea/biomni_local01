@@ -42,6 +42,7 @@ def to_markdown(result: RunResult, *, include_trace: bool = True) -> str:
     parts = [
         _header(result),
         _question_section(result),
+        _plan_section(result),
         _answer_section(result),
         _hypotheses_section(result),
         _unsupported_section(result),
@@ -123,6 +124,28 @@ def _question_section(r: RunResult) -> str:
 
     if r.prompt:
         lines += ["<details><summary>エージェントに渡したプロンプト</summary>", "", "```", r.prompt, "```", "", "</details>"]
+    return "\n".join(lines)
+
+
+_PLAN_MARK = {"todo": "☐", "done": "✓", "failed": "✗"}
+
+
+def _plan_section(r: RunResult) -> str:
+    """解析の設計。biomni が最初に立てる計画（docs/design/19）。"""
+    if not r.plan:
+        return ""
+    done = sum(1 for i in r.plan if i.state == "done")
+    failed = sum(1 for i in r.plan if i.state == "failed")
+    lines = ["## 解析の設計", ""]
+    for item in r.plan:
+        note = f"（{item.note}）" if item.note else ""
+        lines.append(f"- {_PLAN_MARK.get(item.state, '☐')} {item.text}{note}")
+    tail = f"{done}/{len(r.plan)} 完了"
+    if failed:
+        tail += f"・{failed} 件失敗"
+    if r.plan_revisions:
+        tail += f"・計画を {r.plan_revisions} 回立て直し"
+    lines += ["", f"（{tail}）", ""]
     return "\n".join(lines)
 
 

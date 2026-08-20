@@ -243,6 +243,8 @@ def _extract(run: RunResult) -> dict[str, Any]:
         *[p.finding for p in run.answer_reasoning],
         *[e.identifier for p in run.answer_reasoning for e in p.evidence],
         *run.answer_uncertainties,
+        # 計画も検索対象に。「何をやろうとしたか」で過去のランを引ける
+        *[i.text for i in run.plan],
     ]
 
     return {

@@ -103,6 +103,12 @@ def run_hypothesis(
     result.steps = trace.steps
     result.solution_text = trace.solution_text
     result.resources_considered = trace.resources_considered
+    result.plan = trace.plan
+    result.plan_revisions = trace.plan_revisions
+    if not result.plan:
+        # biomni は計画を立てるよう指示しているので、無いのは異常寄り
+        # （指示追従性が低いモデル）。分かるようにしておく
+        result.extra["plan_missing"] = True
     if trace.stopped_reason:
         result.extra["stopped_reason"] = trace.stopped_reason
     if trace.hallucinated_observations:

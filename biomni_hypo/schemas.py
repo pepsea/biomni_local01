@@ -23,6 +23,8 @@ class StepKind(StrEnum):
     OBSERVATION = "observation"
     SOLUTION = "solution"
     POLICY_BLOCKED = "policy_blocked"
+    #: 解析の計画（biomni が最初に立てさせるチェックリスト）
+    PLAN = "plan"
     #: モデルが <execute> / <solution> のどちらも出さず、biomni が差し戻した
     PARSING_ERROR = "parsing_error"
     ERROR = "error"
@@ -57,6 +59,20 @@ class ToolCall(BaseModel):
     module: str = ""
 
 
+class PlanItem(BaseModel):
+    """解析計画のチェックリスト 1 行。
+
+    biomni は「まず計画を立てろ」と指示しており（a1.py の system prompt）、
+    `1. [ ] ...` / `2. [✓] ...` / `3. [✗] ... (failed because...)` の形で
+    毎ターン更新させる。ここはその 1 行。
+    """
+
+    text: str
+    state: Literal["todo", "done", "failed"] = "todo"
+    #: 失敗した理由（"(failed because ...)" の部分）
+    note: str = ""
+
+
 class Step(BaseModel):
     """エージェントの 1 手。"""
 
@@ -71,6 +87,8 @@ class Step(BaseModel):
     user_files: list[str] = Field(default_factory=list)
     citations: list[Citation] = Field(default_factory=list)
     artifacts: list[Artifact] = Field(default_factory=list)
+    #: kind == PLAN のときの計画の中身
+    plan: list[PlanItem] = Field(default_factory=list)
     duration_ms: int = 0
     error: str = ""
     created_at: datetime = Field(default_factory=_utcnow)
@@ -248,6 +266,10 @@ class RunResult(BaseModel):
     prompt: str = ""
     status: Literal["running", "succeeded", "failed", "cancelled"] = "running"
     config: RunConfig = Field(default_factory=RunConfig)
+    #: 最新の解析計画（毎ターン更新されるので最後のものを残す）
+    plan: list[PlanItem] = Field(default_factory=list)
+    #: 計画が書き直された回数（初回を除く）
+    plan_revisions: int = 0
     resources_considered: dict[str, list[str]] = Field(default_factory=dict)
     resources_used: list[Resource] = Field(default_factory=list)
     steps: list[Step] = Field(default_factory=list)

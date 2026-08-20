@@ -14,13 +14,13 @@ import re
 import time
 import uuid
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from biomni_hypo.agent_factory import AgentBundle, reset_agent_state
 from biomni_hypo.citations import extract_citations
 from biomni_hypo.guard import PolicyGuard, policy_guard
-from biomni_hypo.schemas import Artifact, Step, StepKind, ToolCall
+from biomni_hypo.schemas import Artifact, PlanItem, Step, StepKind, ToolCall
 
 log = logging.getLogger(__name__)
 
@@ -33,6 +33,24 @@ FILE_REF_RE = re.compile(r"""['"]([\w./-]+\.(?:csv|tsv|parquet|pkl|json|obo|txt|
 # biomni が「タグが無い」応答を検知したときに会話へ差し込む定型文（a1.py の generate ノード）。
 # これは LLM の思考ではなくフレームワークの差し戻しなので、think として出すと
 # 「モデルが何か考えている」ように見えてしまう。専用の種別に分ける。
+# biomni は「まず計画を立てろ」と指示している（a1.py の system prompt）:
+#   "Given a task, make a plan first. ... Format your plan as a checklist
+#    with empty checkboxes like this:  1. [ ] First step"
+#   "Always show the updated plan after each step so the user can track progress."
+# 実際そのとおり出てくるが、素通しすると単なる think になって埋もれる。
+# ここで拾って「解析の設計」として独立させる（docs/design/19）。
+PLAN_LINE_RE = re.compile(
+    r"^\s*(?:\d+[.)]|[-*])\s*\[\s*([^\]]?)\s*\]\s*(.+?)\s*$",
+    re.MULTILINE,
+)
+#: 計画とみなす最小行数。1 行だけの箇条書きを計画と呼ばない
+MIN_PLAN_ITEMS = 2
+#: 完了を表す印。モデルによって揺れる
+_DONE_MARKS = {"✓", "✔", "x", "X", "√", "☑", "*"}
+_FAILED_MARKS = {"✗", "✘", "×", "-", "!"}
+#: "(failed because ...)" のような補足
+_NOTE_RE = re.compile(r"[（(]\s*(?:failed|skipped|完了|失敗)?[^)）]*[)）]\s*$", re.IGNORECASE)
+
 PARSE_RETRY_MARK = "there are no tags in the current response"
 PARSE_GIVEUP_MARK = "execution terminated due to repeated parsing errors"
 
@@ -52,6 +70,10 @@ class TraceResult:
     steps: list[Step]
     solution_text: str
     resources_considered: dict[str, list[str]]
+    #: 最新の解析計画
+    plan: list[PlanItem] = field(default_factory=list)
+    #: 計画が書き直された回数（初回を除く）
+    plan_revisions: int = 0
     stopped_reason: str = ""
     #: LLM の生出力に <observation> が現れた回数。0 でなければ stop が効いていない（AC-1）
     hallucinated_observations: int = 0
@@ -84,6 +106,8 @@ class TracingRunner:
         self.steps: list[Step] = []
         self.solution_text = ""
         self.resources_considered: dict[str, list[str]] = {}
+        self.plan: list[PlanItem] = []
+        self.plan_revisions = 0
         self.stopped_reason = ""
         self.hallucinated_observations = 0
         self.parsing_errors = 0
@@ -178,6 +202,8 @@ class TracingRunner:
             steps=list(self.steps),
             solution_text=self.solution_text,
             resources_considered=dict(self.resources_considered),
+            plan=list(self.plan),
+            plan_revisions=self.plan_revisions,
             stopped_reason=self.stopped_reason,
             hallucinated_observations=self.hallucinated_observations,
             parsing_errors=self.parsing_errors,
@@ -225,10 +251,7 @@ class TracingRunner:
             return out
 
         if exe:
-            preamble = text[: exe.start()].strip()
-            if preamble:
-                out.append(Step(idx=idx, kind=StepKind.THINK, text=_strip_tags(preamble)))
-                idx += 1
+            idx = self._emit_preamble(out, text[: exe.start()], idx, duration_ms)
             code = exe.group(1).strip()
             if OBSERVATION_RE.search(text[exe.end():]):
                 # </execute> の先に自分で observation を書いている = stop が効いていない
@@ -251,12 +274,69 @@ class TracingRunner:
             return out
 
         if sol:
+            # 最終ターンでも計画は更新される（biomni は毎ターン再掲させる）。
+            # ここを飛ばすと「最後に何が終わって何が失敗したか」が残らない
+            idx = self._emit_preamble(out, text[: sol.start()], idx, duration_ms)
             self.solution_text = sol.group(1).strip()
             out.append(Step(idx=idx, kind=StepKind.SOLUTION, text=self.solution_text, duration_ms=duration_ms))
             return out
 
-        out.append(Step(idx=idx, kind=StepKind.THINK, text=_strip_tags(text), duration_ms=duration_ms))
+        plan_step = self._plan_step(text, idx, duration_ms)
+        if plan_step is not None:
+            out.append(plan_step)
+            idx += 1
+        rest = _strip_plan(text)
+        if rest or not out:
+            out.append(
+                Step(idx=idx, kind=StepKind.THINK, text=_strip_tags(rest or text), duration_ms=duration_ms)
+            )
         return out
+
+    def _emit_preamble(self, out: list[Step], raw: str, idx: int, duration_ms: int) -> int:
+        """タグの手前にある文章を、計画と思考に分けて積む。
+
+        計画は think に混ぜない。混ぜると「解析の設計」が思考の断片として
+        埋もれる（docs/design/19 §19.3）。
+        """
+        preamble = raw.strip()
+        if not preamble:
+            return idx
+        plan_step = self._plan_step(preamble, idx, duration_ms)
+        if plan_step is not None:
+            out.append(plan_step)
+            idx += 1
+        rest = _strip_plan(preamble)
+        if rest:
+            out.append(Step(idx=idx, kind=StepKind.THINK, text=_strip_tags(rest)))
+            idx += 1
+        return idx
+
+    def _plan_step(self, text: str, idx: int, duration_ms: int) -> Step | None:
+        """チェックリスト形式の計画を拾って PLAN ステップにする。
+
+        biomni は毎ターン計画を再掲させるので、同じ内容が何度も流れてくる。
+        中身が変わったときだけ「書き直し」として数える。
+        """
+        items = parse_plan(text)
+        if len(items) < MIN_PLAN_ITEMS:
+            return None
+        changed = [(i.text, i.state) for i in items] != [(i.text, i.state) for i in self.plan]
+        if self.plan and changed:
+            # 手順の並び自体が変わった場合だけ「書き直し」。
+            # チェックが進んだだけなら進捗であって書き直しではない
+            if [i.text for i in items] != [i.text for i in self.plan]:
+                self.plan_revisions += 1
+        self.plan = items
+        if not changed:
+            return None  # 同じ計画の再掲。ステップにしない
+        done = sum(1 for i in items if i.state == "done")
+        return Step(
+            idx=idx,
+            kind=StepKind.PLAN,
+            text=f"解析の計画（{done}/{len(items)} 完了）",
+            plan=items,
+            duration_ms=duration_ms,
+        )
 
     def _classify_parse_error(self, text: str, idx: int, duration_ms: int) -> Step | None:
         """biomni の差し戻し／打ち切りメッセージなら PARSING_ERROR にする。
@@ -363,6 +443,42 @@ class TracingRunner:
                 step.artifacts.append(
                     Artifact(id=f"{step.idx}_{i}", kind="image", mime="image/png", data_b64=str(data))
                 )
+
+
+def parse_plan(text: str) -> list[PlanItem]:
+    """チェックリスト形式の計画を PlanItem に変換する。
+
+    biomni が指示している形:
+        1. [ ] First step
+        2. [✓] Second step (completed)
+        3. [✗] Third step (failed because ...)
+
+    印はモデルによって揺れる（x / X / ✔ / × / - など）ので広めに受ける。
+    """
+    items: list[PlanItem] = []
+    for mark, body in PLAN_LINE_RE.findall(text):
+        body = body.strip()
+        if not body:
+            continue
+        m = (mark or "").strip()
+        if m in _FAILED_MARKS:
+            state = "failed"
+        elif m and m in _DONE_MARKS:
+            state = "done"
+        else:
+            state = "todo"
+        note = ""
+        found = _NOTE_RE.search(body)
+        if found and state != "todo":
+            note = found.group(0).strip("（）() ")
+            body = body[: found.start()].strip()
+        items.append(PlanItem(text=body[:300], state=state, note=note[:300]))
+    return items
+
+
+def _strip_plan(text: str) -> str:
+    """計画の行を落とした残り（本文としての思考）。"""
+    return PLAN_LINE_RE.sub("", text).strip()
 
 
 def _human_message(text: str) -> Any:

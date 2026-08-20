@@ -12,14 +12,14 @@
 
 | レイヤ | 状態 |
 | --- | --- |
-| 設計 (`docs/design/`) | ✅ 01〜18 |
+| 設計 (`docs/design/`) | ✅ 01〜19 |
 | コアパッケージ (`biomni_hypo/`) | ✅ 実装済み |
 | 検証ノートブック (`notebooks/`) | ✅ 5 本 |
 | API + SSE (`backend/`) | ✅ 実装済み・実サーバで動作確認 |
-| テスト | ✅ **279 件**（うち 16 件は実物の biomni に対する統合テスト） |
+| テスト | ✅ **298 件**（うち 16 件は実物の biomni に対する統合テスト） |
 | モデル選択 | ✅ ローカルの Ollama を読み込んで選択（ライセンス判定つき） |
 | 質問入力 | ✅ 構造化入力・テンプレート・入力検査・プロンプト確認 |
-| Web UI | ✅ 依存なしの 1 ファイル（`/`）。回答・**論点**・根拠・情報源・リアルタイムトレース |
+| Web UI | ✅ 依存なしの 1 ファイル（`/`）。**解析の設計**・回答・**論点**・根拠・情報源・トレース |
 | リアルタイム出力 | ✅ トークン単位の実況（biomni 無改変） |
 | LLM プロバイダ | ✅ Ollama（ローカル）と Claude API を**実行ごとに**選択 |
 | 調査履歴 | ✅ 条件込みで検索・絞り込み・再表示・削除 |
@@ -346,7 +346,7 @@ backend/app/     FastAPI + SSE + ラン実行ワーカー（子プロセス）+ 
   store.py       ラン保存と検索（条件も列に射影する）
 config/          resource_policy.yaml（商用限定・既定拒否）
 scripts/         質問の実行(ask)・モデル一覧・データセット取得・セットアップ
-tests/           279 件。うち 263 件は外部サービス不要
+tests/           298 件。うち 282 件は外部サービス不要
 docs/design/     設計書
 ```
 
@@ -378,6 +378,7 @@ docs/design/     設計書
 | [16-parsing-errors](docs/design/16-parsing-errors.md) | **タグ無し応答**（"there are no tags..."）の原因と対処 |
 | [17-ollama-connectivity](docs/design/17-ollama-connectivity.md) | **Ollama に繋がらない**ときの切り分け |
 | [18-answer-reasoning](docs/design/18-answer-reasoning.md) | **最終回答に論点を持たせる**（biomni 既定は採点用の短答） |
+| [19-analysis-plan](docs/design/19-analysis-plan.md) | **解析の設計**（biomni が最初に立てる計画）を見えるようにする |
 
 ## 設計の要点
 

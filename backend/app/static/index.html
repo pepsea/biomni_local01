@@ -72,6 +72,19 @@
   .step.execute { border-left-color:var(--accent); } .step.observation { border-left-color:var(--ok); }
   .step.policy_blocked { border-left-color:var(--err); } .step.solution { border-left-color:var(--warn); }
   .step.parsing_error { border-left-color:var(--warn); background:rgba(255,176,0,.07); }
+  ul.plan { list-style:none; padding:0; margin:0; }
+  ul.plan li { padding:5px 0 5px 26px; position:relative; line-height:1.55; }
+  ul.plan li::before { position:absolute; left:2px; top:5px; font-weight:600; }
+  ul.plan li.todo::before   { content:"☐"; color:var(--muted); }
+  ul.plan li.done::before   { content:"✓"; color:var(--ok); }
+  ul.plan li.failed::before { content:"✗"; color:var(--err); }
+  ul.plan li.done   { color:var(--muted); }
+  ul.plan li.failed { color:var(--err); }
+  ul.plan .note { color:var(--muted); font-size:12px; margin-left:6px; }
+  .plancard { border:1px solid var(--line); border-radius:8px; padding:10px 14px; margin-bottom:12px; }
+  .planbar { height:4px; background:var(--dim); border-radius:2px; overflow:hidden; margin-top:8px; }
+  .planbar > i { display:block; height:100%; background:var(--ok); }
+  .step.plan { border-left-color:var(--accent); }
   ol.reasoning { list-style:none; padding:0; margin:0; }
   .rp { border:1px solid var(--line); border-left-width:4px; border-radius:8px;
         padding:10px 12px; margin-bottom:10px; }
@@ -431,6 +444,15 @@ function listen(id) {
   es.addEventListener("step", ev => {
     const s = JSON.parse(ev.data); STEPS.push(s);
     if (s.kind === "parsing_error") showParseWarning(s.text);
+    if (s.kind === "plan" && s.plan && s.plan.length) {
+      // 進行中は計画を上部に固定しておく。どこまで進んだかを追えるように
+      let box = $("livePlan");
+      if (!box) {
+        box = document.createElement("div"); box.id = "livePlan";
+        $("tab-trace").prepend(box);
+      }
+      box.innerHTML = planBlock(s.plan, 0);
+    }
     const box = $("steps"); if (!box) return;
     const head = (s.code || s.text || "").split("\n").find(Boolean) || "";
     const el = document.createElement("div");
@@ -474,6 +496,7 @@ async function showResult(id) {
     ${r.extra?.answer_is_unstructured ? '<div class="msg warning">⚠️ 構造化に失敗したため、エージェントの結論をそのまま表示しています。</div>' : ""}
     ${r.extra?.parsing_errors ? `<div class="msg warning">⚠️ モデルがタグ付きの応答を出せず、biomni が ${r.extra.parsing_errors} 回差し戻しました。${esc(r.extra.parsing_error_hint||"")}</div>` : ""}
     ${r.extra?.stopped_reason ? `<div class="msg warning">⚠️ ${esc(r.extra.stopped_reason)}</div>` : ""}
+    ${planBlock(r.plan, r.plan_revisions)}
     ${reasoningBlock(r.answer_reasoning, r.answer_uncertainties)}
     <h2>この回答の根拠</h2>
     ${chips(r.answer_evidence) || '<div class="msg warning">⚠️ 検証を通った根拠が紐付いていません。</div>'}
@@ -519,6 +542,24 @@ async function showResult(id) {
         (body.length > 150 ? `<pre>${esc(body.slice(0,6000))}</pre>` : "") + `</div>`;
     }).join("");
   showTab("answer");
+}
+
+// 解析の計画。biomni は最初にチェックリスト形式の計画を立てさせ、毎ターン更新させる
+// （a1.py の system prompt）。素通しすると think に埋もれるので独立させる。
+function planBlock(plan, revisions) {
+  if (!plan || !plan.length) return "";
+  const done = plan.filter(i => i.state === "done").length;
+  const failed = plan.filter(i => i.state === "failed").length;
+  const pct = Math.round(done / plan.length * 100);
+  return `<h2>解析の設計</h2>
+    <div class="plancard">
+      <ul class="plan">${plan.map(i =>
+        `<li class="${esc(i.state)}">${esc(i.text)}${i.note ? `<span class="note">${esc(i.note)}</span>` : ""}</li>`
+      ).join("")}</ul>
+      <div class="planbar"><i style="width:${pct}%"></i></div>
+      <div class="hintline">${done}/${plan.length} 完了${failed ? ` · ${failed} 件失敗` : ""}${
+        revisions ? ` · 計画を ${revisions} 回立て直しました` : ""}</div>
+    </div>`;
 }
 
 // 結論に至った論点。結論だけ出すと、読んだ人は受け入れるか捨てるかしか選べない。

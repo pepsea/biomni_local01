@@ -343,6 +343,25 @@ TRACE_MESSAGES_HALLUCINATED = [
     "<solution>結論</solution>",
 ]
 
+#: biomni の指示どおり計画を立ててから進むトレース（docs/design/19）
+TRACE_MESSAGES_PLANNED = [
+    "この課題の計画を立てます。\n"
+    "1. [ ] GWAS Catalog で乳がん関連座位を確認する\n"
+    "2. [ ] DepMap で候補遺伝子の依存性を見る\n"
+    "3. [ ] 結果 を突き合わせて仮説を立てる\n"
+    "<execute>\nprint('start')\n</execute>",
+    "<observation>start</observation>",
+    "1. [✓] GWAS Catalog で乳がん関連座位を確認する (completed)\n"
+    "2. [ ] DepMap で候補遺伝子の依存性を見る\n"
+    "3. [ ] 結果 を突き合わせて仮説を立てる\n"
+    "<execute>\nimport pandas as pd\nprint(pd.read_csv('DepMap_CRISPRGeneEffect.csv').head())\n</execute>",
+    "<observation>" + OBSERVATION_DEPMAP + "</observation>",
+    "1. [✓] GWAS Catalog で乳がん関連座位を確認する\n"
+    "2. [✗] DepMap で候補遺伝子の依存性を見る (failed because データが欠損)\n"
+    "3. [✓] 結果 を突き合わせて仮説を立てる\n"
+    "<solution>" + SAMPLE_SOLUTION + "</solution>",
+]
+
 #: モデルがタグ無しで応答し、biomni の generate ノードが差し戻したトレース。
 #: 実測の再現（docs/design/16 §16.1）。
 TRACE_MESSAGES_PARSE_RETRY = [
