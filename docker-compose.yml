@@ -73,7 +73,10 @@ services:
       # 外部に出したくないなら APP_BIND=127.0.0.1
       - "${APP_BIND:-0.0.0.0}:${APP_PORT:-8000}:8000"
     environment:
-      OLLAMA_BASE_URL: http://ollama:11434
+      # environment: は env_file: より強い。ここをベタ書きすると .env の
+      # OLLAMA_BASE_URL が無視され、scripts/use-host-ollama.sh が効かなくなる。
+      # 既定は ollama コンテナ、.env にあればそちらを使う（docs/design/17）
+      OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://ollama:11434}"
       BIOMNI_PATH: /app/data
       HYPO_WORKSPACE: /app/workspace
       HYPO_POLICY_PATH: /app/config/resource_policy.yaml

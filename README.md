@@ -12,7 +12,7 @@
 
 | レイヤ | 状態 |
 | --- | --- |
-| 設計 (`docs/design/`) | ✅ 01〜16 |
+| 設計 (`docs/design/`) | ✅ 01〜17 |
 | コアパッケージ (`biomni_hypo/`) | ✅ 実装済み |
 | 検証ノートブック (`notebooks/`) | ✅ 5 本 |
 | API + SSE (`backend/`) | ✅ 実装済み・実サーバで動作確認 |
@@ -96,6 +96,17 @@ Claude のみにすると `COMPOSE_PROFILES` が空になり、
 - クリックすると回答・仮説・集めた情報・実行トレースをそのまま復元
 
 詳細は [14-search-and-history.md](docs/design/14-search-and-history.md)。
+
+### Ollama は起動しているのに「未接続」と出るとき
+
+```bash
+make ollama-check
+```
+
+ホスト → Ollama、`.env` の設定、コンテナ → Ollama の 3 か所を実際に `curl` で叩いて、
+どこで切れているかと直し方を出します。よくある原因は
+[17-ollama-connectivity.md](docs/design/17-ollama-connectivity.md) にまとめてあります
+（コンテナの `localhost` はホストではない / Ollama が 127.0.0.1 しか待ち受けていない、など）。
 
 ### ポートが衝突するとき
 
@@ -356,6 +367,7 @@ docs/design/     設計書
 | [14-search-and-history](docs/design/14-search-and-history.md) | **調査履歴の検索**（条件込み） |
 | [15-provider-switching](docs/design/15-provider-switching.md) | **Ollama と Claude を両方**選べるようにする |
 | [16-parsing-errors](docs/design/16-parsing-errors.md) | **タグ無し応答**（"there are no tags..."）の原因と対処 |
+| [17-ollama-connectivity](docs/design/17-ollama-connectivity.md) | **Ollama に繋がらない**ときの切り分け |
 
 ## 設計の要点
 
