@@ -20,6 +20,7 @@ from biomni_hypo.schemas import (
     Evidence,
     EvidenceCandidate,
     Hypothesis,
+    ReasoningPoint,
     ResourceKind,
     Stance,
     Step,
@@ -41,6 +42,28 @@ HYPOTHESIS_JSON_SCHEMA: dict[str, Any] = {
                 "required": ["eid"],
             },
         },
+        "reasoning": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "point": {"type": "string"},
+                    "finding": {"type": "string"},
+                    "stance": {"type": "string", "enum": ["supports", "refutes", "context"]},
+                    "weight": {"type": "string", "enum": ["decisive", "supporting", "weak"]},
+                    "evidence": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {"eid": {"type": "string"}, "why": {"type": "string"}},
+                            "required": ["eid"],
+                        },
+                    },
+                },
+                "required": ["point", "finding"],
+            },
+        },
+        "uncertainties": {"type": "array", "items": {"type": "string"}},
         "hypotheses": {
             "type": "array",
             "items": {
@@ -89,7 +112,7 @@ HYPOTHESIS_JSON_SCHEMA: dict[str, Any] = {
             },
         },
     },
-    "required": ["answer", "hypotheses"],
+    "required": ["answer", "reasoning", "hypotheses"],
 }
 
 PROMPT_TEMPLATE = """あなたは生物医学の研究者です。以下の調査ログから、(1) 質問への回答 と (2) 検証可能な仮説（最大 {max_hypotheses} 件）を抽出してください。
@@ -110,7 +133,20 @@ PROMPT_TEMPLATE = """あなたは生物医学の研究者です。以下の調�
 0. answer は日本語で 3〜5 文。質問に正面から答えること。
    調査で分かったことだけを書き、分からなかったことは「分からなかった」と書くこと。
    answer_evidence には、その回答を支える根拠 ID を挙げること。
-1. evidence / answer_evidence の eid は、上の「使用できる根拠」に載っている ID のみを使うこと。
+0-a. reasoning に、その回答に至った論点を 2〜6 件挙げること。**結論だけでは不十分です。**
+   1 件ごとに:
+     point   : 検討した論点。「〜か」という問いの形で書く
+               例:「FGFR2 の乳がんとの関連は公共データで再現するか」
+     finding : それを調べて実際に分かったこと。数値・遺伝子名・件数を含めること
+     stance  : その論点が結論を supports（支持）/ refutes（反証）/ context（判断材料）のどれか
+     weight  : decisive（これが無ければ結論が変わる）/ supporting（補強）/ weak（弱い）
+     evidence: その論点を裏付ける根拠 ID
+   結論と食い違う所見や、検討したが採らなかった解釈も、stance を "refutes" にして
+   必ず含めること。都合のよい論点だけを並べてはいけません。
+0-b. uncertainties に、調べたが分からなかったこと・この回答の限界を挙げること。
+   無ければ空配列。「無い」と嘘を書くよりは空にすること。
+1. evidence / answer_evidence / reasoning[].evidence の eid は、
+   上の「使用できる根拠」に載っている ID のみを使うこと。
    リストに無い ID・自分で考えた PMID や遺伝子 ID を書いてはいけません。
 2. statement に PMID や DOI やアクセッション番号を直接書かないこと。識別子は evidence でのみ表現します。
 3. 根拠が見つからない着想も、evidence を空配列にして出力してよい（捨てないこと）。
@@ -121,6 +157,9 @@ PROMPT_TEMPLATE = """あなたは生物医学の研究者です。以下の調�
 # 出力する JSON の形
 {{"answer": "調査の結果、…（3〜5 文）",
   "answer_evidence": [{{"eid": "E1", "why": "…"}}],
+  "reasoning": [{{"point": "…か", "finding": "…", "stance": "supports|refutes|context",
+    "weight": "decisive|supporting|weak", "evidence": [{{"eid": "E1", "why": "…"}}]}}],
+  "uncertainties": ["…"],
   "hypotheses": [{{"statement": "...", "rationale": "...", "confidence": "high|medium|low",
   "novelty": "established|emerging|speculative",
   "evidence": [{{"eid": "E1", "stance": "supports", "claim_span": "...", "why": "..."}}],
@@ -134,6 +173,8 @@ PROMPT_TEMPLATE = """あなたは生物医学の研究者です。以下の調�
 class ExtractionResult:
     answer: str = ""
     answer_evidence: list[Evidence] = field(default_factory=list)
+    answer_reasoning: list[ReasoningPoint] = field(default_factory=list)
+    answer_uncertainties: list[str] = field(default_factory=list)
     hypotheses: list[Hypothesis] = field(default_factory=list)
     candidates: list[EvidenceCandidate] = field(default_factory=list)
     unknown_eids: list[str] = field(default_factory=list)
@@ -254,6 +295,10 @@ def parse_response(raw: str, candidates: Iterable[EvidenceCandidate]) -> Extract
 
     result.answer = str(payload.get("answer", "")).strip()
     result.answer_evidence = _build_evidence(payload.get("answer_evidence"), by_eid, result)
+    result.answer_reasoning = _build_reasoning(payload.get("reasoning"), by_eid, result)
+    result.answer_uncertainties = [
+        str(u).strip() for u in (payload.get("uncertainties") or []) if str(u).strip()
+    ]
 
     items = payload.get("hypotheses")
     if not isinstance(items, list):
@@ -319,6 +364,38 @@ def _build_evidence(
             )
         )
     return out
+
+
+def _build_reasoning(
+    raw: Any, by_eid: dict[str, EvidenceCandidate], result: ExtractionResult
+) -> list[ReasoningPoint]:
+    """論点を組み立てる。
+
+    根拠は _build_evidence を通すので、幻覚 ID は論点ごと捨てるのではなく
+    根拠だけが落ちる。論点そのものは残す（「根拠が無い論点」も情報である）。
+    """
+    out: list[ReasoningPoint] = []
+    for item in raw or []:
+        if not isinstance(item, dict):
+            continue
+        point = str(item.get("point", "")).strip()
+        if not point:
+            continue
+        out.append(
+            ReasoningPoint(
+                point=point[:400],
+                finding=str(item.get("finding", "")).strip()[:800],
+                stance=_stance(item.get("stance")),
+                weight=_weight(item.get("weight")),
+                evidence=_build_evidence(item.get("evidence"), by_eid, result),
+            )
+        )
+    return out
+
+
+def _weight(value: Any) -> str:
+    v = str(value or "").strip().lower()
+    return v if v in ("decisive", "supporting", "weak") else "supporting"
 
 
 def _stance(value: Any) -> Stance:

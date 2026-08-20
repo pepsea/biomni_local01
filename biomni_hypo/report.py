@@ -14,6 +14,7 @@ from biomni_hypo.schemas import (
     Hypothesis,
     ResourceKind,
     RunResult,
+    Stance,
     StepKind,
     VerificationStatus,
 )
@@ -143,7 +144,48 @@ def _answer_section(r: RunResult) -> str:
             )
     else:
         lines.append("> ⚠️ この回答には検証を通った根拠が紐付いていません。")
+    lines += ["", *_reasoning_lines(r)]
     return "\n".join(lines)
+
+
+_STANCE_LABEL = {Stance.SUPPORTS: "支持", Stance.REFUTES: "反証", Stance.CONTEXT: "判断材料"}
+_WEIGHT_LABEL = {"decisive": "決め手", "supporting": "補強", "weak": "弱い"}
+
+
+def _reasoning_lines(r: RunResult) -> list[str]:
+    """結論に至った論点。レポートでも結論だけを載せない（docs/design/18）。"""
+    lines: list[str] = []
+    if r.answer_reasoning:
+        lines += ["### この結論に至った論点", ""]
+        # 反証を最後に押しやらない
+        ordered = sorted(r.answer_reasoning, key=lambda p: p.stance is not Stance.REFUTES)
+        for i, pt in enumerate(ordered, 1):
+            lines.append(
+                f"{i}. **{pt.point}**  "
+                f"（{_STANCE_LABEL.get(pt.stance, pt.stance.value)}・"
+                f"{_WEIGHT_LABEL.get(pt.weight, pt.weight)}）"
+            )
+            if pt.finding:
+                lines.append(f"   - 分かったこと: {pt.finding}")
+            if pt.evidence:
+                refs = ", ".join(
+                    f"{e.identifier} {_STATUS_MARK.get(e.verification_status, '?')}"
+                    for e in pt.evidence
+                )
+                lines.append(f"   - 根拠: {refs}")
+            else:
+                lines.append("   - 根拠: なし（この論点は裏付けられていません）")
+        lines.append("")
+    elif r.answer:
+        lines += [
+            "> ⚠️ 論点を抽出できませんでした。抽出モデルが結論だけを返しています。",
+            "",
+        ]
+    if r.answer_uncertainties:
+        lines += ["### 分からなかったこと", ""]
+        lines += [f"- {u}" for u in r.answer_uncertainties]
+        lines.append("")
+    return lines
 
 
 def _hypotheses_section(r: RunResult) -> str:

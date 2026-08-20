@@ -135,6 +135,13 @@ def run_hypothesis(
     # 回答の根拠も同じ基準で検証する（仮説と扱いを変えない）
     result.answer = extraction.answer
     result.answer_evidence = verifier.verify_evidence_list(extraction.answer_evidence, trace.steps)
+    # 論点の根拠も同じ検証を通す。論点だけ検証を免除すると、
+    # 「もっともらしい筋道」が無検証で通ってしまう
+    result.answer_reasoning = []
+    for point in extraction.answer_reasoning:
+        point.evidence = verifier.verify_evidence_list(point.evidence, trace.steps)
+        result.answer_reasoning.append(point)
+    result.answer_uncertainties = list(extraction.answer_uncertainties)
     supported, unsupported, report = verifier.verify_run(extraction.hypotheses, trace.steps)
     result.hypotheses = supported
     result.unsupported_ideas = unsupported
@@ -149,6 +156,15 @@ def run_hypothesis(
         # 抽出が失敗しても、エージェントの結論だけは見せる
         result.answer = trace.solution_text
         result.extra["answer_is_unstructured"] = True
+
+    if not result.answer_reasoning and result.answer:
+        # 結論はあるのに論点が無い＝biomni 既定の「短い答え」に戻っている状態
+        # （docs/design/18 §18.1）。黙って結論だけ出さず、必ず旗を立てる。
+        result.extra["reasoning_missing"] = True
+        log.warning(
+            "回答は得られましたが論点が抽出できませんでした。"
+            "抽出モデルが結論だけを返しています（docs/design/18 §18.4）。"
+        )
 
     result.status = "failed" if (result.error and not result.steps) else "succeeded"
     result.finished_at = datetime.now(UTC)

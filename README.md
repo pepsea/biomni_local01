@@ -12,14 +12,14 @@
 
 | レイヤ | 状態 |
 | --- | --- |
-| 設計 (`docs/design/`) | ✅ 01〜17 |
+| 設計 (`docs/design/`) | ✅ 01〜18 |
 | コアパッケージ (`biomni_hypo/`) | ✅ 実装済み |
 | 検証ノートブック (`notebooks/`) | ✅ 5 本 |
 | API + SSE (`backend/`) | ✅ 実装済み・実サーバで動作確認 |
-| テスト | ✅ **267 件**（うち 16 件は実物の biomni に対する統合テスト） |
+| テスト | ✅ **279 件**（うち 16 件は実物の biomni に対する統合テスト） |
 | モデル選択 | ✅ ローカルの Ollama を読み込んで選択（ライセンス判定つき） |
 | 質問入力 | ✅ 構造化入力・テンプレート・入力検査・プロンプト確認 |
-| Web UI | ✅ 依存なしの 1 ファイル（`/`）。回答・根拠・情報源・リアルタイムトレース |
+| Web UI | ✅ 依存なしの 1 ファイル（`/`）。回答・**論点**・根拠・情報源・リアルタイムトレース |
 | リアルタイム出力 | ✅ トークン単位の実況（biomni 無改変） |
 | LLM プロバイダ | ✅ Ollama（ローカル）と Claude API を**実行ごとに**選択 |
 | 調査履歴 | ✅ 条件込みで検索・絞り込み・再表示・削除 |
@@ -346,7 +346,7 @@ backend/app/     FastAPI + SSE + ラン実行ワーカー（子プロセス）+ 
   store.py       ラン保存と検索（条件も列に射影する）
 config/          resource_policy.yaml（商用限定・既定拒否）
 scripts/         質問の実行(ask)・モデル一覧・データセット取得・セットアップ
-tests/           267 件。うち 251 件は外部サービス不要
+tests/           279 件。うち 263 件は外部サービス不要
 docs/design/     設計書
 ```
 
@@ -377,6 +377,7 @@ docs/design/     設計書
 | [15-provider-switching](docs/design/15-provider-switching.md) | **Ollama と Claude を両方**選べるようにする |
 | [16-parsing-errors](docs/design/16-parsing-errors.md) | **タグ無し応答**（"there are no tags..."）の原因と対処 |
 | [17-ollama-connectivity](docs/design/17-ollama-connectivity.md) | **Ollama に繋がらない**ときの切り分け |
+| [18-answer-reasoning](docs/design/18-answer-reasoning.md) | **最終回答に論点を持たせる**（biomni 既定は採点用の短答） |
 
 ## 設計の要点
 
@@ -386,7 +387,10 @@ docs/design/     設計書
    **その ID からしか選べない**制約下で仮説を書かせる（`biomni_hypo/extractor.py`）。
 3. **引用は実在検証を通してから表示する。** 「コードで触れていないのに引用された」ものは
    幻覚として隔離する（`biomni_hypo/verifier.py`）。
-4. **商用利用は `commercial_mode=True` だけでは足りない。** Biomni の同フラグはデータセットを
+4. **最終回答は結論だけにしない。** biomni の `<solution>` は既定ではベンチマーク採点用の
+   短答（唯一の例が 1 文字の `A`）なので、結論に至った論点を抽出フェーズで組み立て直す。
+   反証と「分からなかったこと」を必ず持ち越す（`docs/design/18`）。
+5. **商用利用は `commercial_mode=True` だけでは足りない。** Biomni の同フラグはデータセットを
    絞るがツールは絞らないため、独自ポリシーで既定拒否を敷く（`biomni_hypo/policy.py`）。
 
 ## 既知の落とし穴（biomni 0.0.8 で実測）

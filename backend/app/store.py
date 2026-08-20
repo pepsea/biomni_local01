@@ -238,6 +238,11 @@ def _extract(run: RunResult) -> dict[str, Any]:
         *[r.name for r in run.resources_used],
         *[e.identifier for h in run.hypotheses for e in h.evidence],
         *[e.identifier for e in run.answer_evidence],
+        # 論点も検索対象にする。「なぜその結論になったか」で過去のランを引けるように
+        *[p.point for p in run.answer_reasoning],
+        *[p.finding for p in run.answer_reasoning],
+        *[e.identifier for p in run.answer_reasoning for e in p.evidence],
+        *run.answer_uncertainties,
     ]
 
     return {

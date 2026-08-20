@@ -12,7 +12,7 @@ from biomni_hypo.fixtures import (
 )
 from biomni_hypo.pipeline import collect_resources, run_hypothesis, summarize
 from biomni_hypo.report import to_markdown
-from biomni_hypo.schemas import ResourceKind
+from biomni_hypo.schemas import ResourceKind, Stance, VerificationStatus
 from biomni_hypo.verifier import EvidenceVerifier
 
 QUESTION = "TNBC で PARP 阻害剤耐性を規定する因子は？"
@@ -181,3 +181,62 @@ def test_policy_blocked_run_still_completes(monkeypatch):
     )
     md = to_markdown(result)
     assert "ポリシーによりブロック" in md
+
+
+# ------------------------------------------------- 論点（最終回答に至った根拠）
+
+
+def test_reasoning_evidence_is_verified_like_everything_else(result):
+    """論点だけ検証を免除しない。
+
+    免除すると「もっともらしい筋道」が無検証で通り、根拠モデル全体
+    （docs/design/03）に穴が開く。
+    """
+    assert result.answer_reasoning, "論点が出ていない"
+    statuses = {
+        e.verification_status
+        for p in result.answer_reasoning
+        for e in p.evidence
+    }
+    assert statuses, "論点に根拠が 1 つも紐付いていない"
+    assert VerificationStatus.UNVERIFIED not in statuses, "未検証のまま素通りしている"
+
+
+def test_counter_arguments_survive_the_pipeline(result):
+    assert any(p.stance is Stance.REFUTES for p in result.answer_reasoning), "反証が消えた"
+
+
+def test_uncertainties_survive_the_pipeline(result):
+    assert result.answer_uncertainties
+    assert not result.extra.get("reasoning_missing")
+
+
+def test_missing_reasoning_raises_a_flag(monkeypatch):
+    """結論だけ返ってきたら黙って出さない（biomni 既定に戻った状態）。"""
+    import json
+
+    settings = Settings(offline_mode=True)
+    bundle = fake_bundle(TRACE_MESSAGES, settings=settings)
+    only_answer = json.dumps(
+        {"answer": "FGFR2 が関与する。", "reasoning": [], "hypotheses": []},
+        ensure_ascii=False,
+    )
+    extractor = HypothesisExtractor(settings, llm=FakeLLM(only_answer))
+
+    import biomni_hypo.tracing as tracing
+
+    original = tracing.TracingRunner.__init__
+    monkeypatch.setattr(
+        tracing.TracingRunner,
+        "__init__",
+        lambda self, b, run_id=None, *, guard_module=None: original(
+            self, b, run_id, guard_module=guard_module or FakeA1Module()
+        ),
+    )
+    r = run_hypothesis(
+        QUESTION, settings=settings, bundle=bundle,
+        extractor=extractor, verifier=EvidenceVerifier(offline=True),
+    )
+    assert r.answer
+    assert not r.answer_reasoning
+    assert r.extra.get("reasoning_missing") is True

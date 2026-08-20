@@ -127,3 +127,71 @@ def test_extractor_uses_injected_llm(steps):
     result = extractor.extract(SAMPLE_QUESTION, steps, SAMPLE_SOLUTION)
     assert result.ok
     assert llm.calls, "注入した LLM が呼ばれていない"
+
+
+# --------------------------------------------------------- 論点（最終回答の根拠）
+# biomni の <solution> は既定では「採点できる短い答え」を返す設計で、
+# 結論に至った筋道が残らない（docs/design/18）。ここで組み立てを取り戻す。
+
+
+def test_reasoning_points_are_extracted(steps):
+    result = parse_response(fake_extraction_response(), build_candidates(steps))
+    assert len(result.answer_reasoning) == 3
+    first = result.answer_reasoning[0]
+    assert first.point.endswith("か"), "論点は問いの形で書かせる"
+    assert first.finding
+    assert first.weight == "decisive"
+
+
+def test_counter_arguments_are_kept(steps):
+    """都合のよい論点だけ残さない。反証は必ず持ち越す。"""
+    result = parse_response(fake_extraction_response(), build_candidates(steps))
+    refutes = [p for p in result.answer_reasoning if p.stance is Stance.REFUTES]
+    assert refutes, "反証の論点が落ちている"
+    assert "直接" in refutes[0].finding
+
+
+def test_a_point_without_evidence_is_still_kept(steps):
+    """根拠が無い論点も情報。捨てると「示せなかった」ことが消える。"""
+    result = parse_response(fake_extraction_response(), build_candidates(steps))
+    empty = [p for p in result.answer_reasoning if not p.evidence]
+    assert empty, "根拠なしの論点が捨てられている"
+
+
+def test_reasoning_evidence_goes_through_the_same_id_check(steps):
+    """論点の根拠も、候補にある ID しか使えない。"""
+    payload = json.loads(fake_extraction_response())
+    payload["reasoning"][0]["evidence"] = [{"eid": "E999", "why": "捏造"}]
+    result = parse_response(json.dumps(payload), build_candidates(steps))
+    assert "E999" in result.unknown_eids
+    assert result.answer_reasoning[0].evidence == [], "未知の ID が根拠として残っている"
+    assert result.answer_reasoning[0].point, "論点そのものは残すこと"
+
+
+def test_unknown_weight_falls_back_to_supporting(steps):
+    payload = json.loads(fake_extraction_response())
+    payload["reasoning"][0]["weight"] = "とても重要"
+    result = parse_response(json.dumps(payload), build_candidates(steps))
+    assert result.answer_reasoning[0].weight == "supporting"
+
+
+def test_points_without_a_question_are_dropped(steps):
+    payload = json.loads(fake_extraction_response())
+    payload["reasoning"].append({"point": "   ", "finding": "中身だけある"})
+    result = parse_response(json.dumps(payload), build_candidates(steps))
+    assert all(p.point.strip() for p in result.answer_reasoning)
+
+
+def test_uncertainties_are_extracted(steps):
+    result = parse_response(fake_extraction_response(), build_candidates(steps))
+    assert result.answer_uncertainties
+    assert "直接結ぶ実験データ" in result.answer_uncertainties[0]
+
+
+def test_the_prompt_demands_reasoning():
+    """プロンプトが論点を必須にしていること（ここが緩むと結論だけに戻る）。"""
+    from biomni_hypo.extractor import HYPOTHESIS_JSON_SCHEMA, PROMPT_TEMPLATE
+
+    assert "reasoning" in HYPOTHESIS_JSON_SCHEMA["required"]
+    assert "結論だけでは不十分" in PROMPT_TEMPLATE
+    assert "refutes" in PROMPT_TEMPLATE

@@ -72,6 +72,22 @@
   .step.execute { border-left-color:var(--accent); } .step.observation { border-left-color:var(--ok); }
   .step.policy_blocked { border-left-color:var(--err); } .step.solution { border-left-color:var(--warn); }
   .step.parsing_error { border-left-color:var(--warn); background:rgba(255,176,0,.07); }
+  ol.reasoning { list-style:none; padding:0; margin:0; }
+  .rp { border:1px solid var(--line); border-left-width:4px; border-radius:8px;
+        padding:10px 12px; margin-bottom:10px; }
+  .rp.supports { border-left-color:var(--ok); }
+  .rp.refutes  { border-left-color:var(--err); background:rgba(220,60,60,.05); }
+  .rp.context  { border-left-color:var(--line); }
+  .rp-head { display:flex; align-items:baseline; gap:6px; flex-wrap:wrap; margin-bottom:4px; }
+  .rp-head b { font-weight:600; }
+  .rp-find { color:var(--muted); margin:4px 0 8px; line-height:1.6; }
+  .rp-noev { color:var(--warn); font-size:12px; margin-top:4px; }
+  .badge { font-size:11px; padding:1px 7px; border-radius:999px; border:1px solid var(--line);
+           white-space:nowrap; }
+  .badge.supports { border-color:var(--ok); color:var(--ok); }
+  .badge.refutes  { border-color:var(--err); color:var(--err); }
+  .badge.w-decisive { border-color:var(--warn); color:var(--warn); font-weight:600; }
+  ul.unc { margin:0; padding-left:20px; color:var(--muted); line-height:1.7; }
   .step button.more { background:none; border:none; color:var(--accent); cursor:pointer;
                       font:inherit; font-size:11.5px; padding:0 4px; }
   .hyp { border:1px solid var(--line); border-radius:8px; padding:13px 15px; margin-bottom:11px; background:var(--card); }
@@ -458,6 +474,7 @@ async function showResult(id) {
     ${r.extra?.answer_is_unstructured ? '<div class="msg warning">⚠️ 構造化に失敗したため、エージェントの結論をそのまま表示しています。</div>' : ""}
     ${r.extra?.parsing_errors ? `<div class="msg warning">⚠️ モデルがタグ付きの応答を出せず、biomni が ${r.extra.parsing_errors} 回差し戻しました。${esc(r.extra.parsing_error_hint||"")}</div>` : ""}
     ${r.extra?.stopped_reason ? `<div class="msg warning">⚠️ ${esc(r.extra.stopped_reason)}</div>` : ""}
+    ${reasoningBlock(r.answer_reasoning, r.answer_uncertainties)}
     <h2>この回答の根拠</h2>
     ${chips(r.answer_evidence) || '<div class="msg warning">⚠️ 検証を通った根拠が紐付いていません。</div>'}
     <h2>まとめ</h2>
@@ -502,6 +519,44 @@ async function showResult(id) {
         (body.length > 150 ? `<pre>${esc(body.slice(0,6000))}</pre>` : "") + `</div>`;
     }).join("");
   showTab("answer");
+}
+
+// 結論に至った論点。結論だけ出すと、読んだ人は受け入れるか捨てるかしか選べない。
+// 「何を確かめて、何が分かって、それが結論をどう左右したか」を開く。
+const STANCE_LABEL = {supports:"支持", refutes:"反証", context:"判断材料"};
+const WEIGHT_LABEL = {decisive:"決め手", supporting:"補強", weak:"弱い"};
+
+function reasoningBlock(points, uncertainties) {
+  points = points || []; uncertainties = uncertainties || [];
+  if (!points.length && !uncertainties.length) {
+    return `<h2>この結論に至った論点</h2>
+      <div class="msg warning">⚠️ 論点を抽出できませんでした。抽出モデルが結論だけを
+      返しています。より大きなモデル（qwen3:14b 以上、または Claude）を試すか、
+      「実行トレース」で調査の手順そのものを確認してください。</div>`;
+  }
+  let html = "";
+  if (points.length) {
+    // 反証は埋もれさせない。決め手 -> 反証 -> それ以外の順に出す
+    const order = {decisive:0, supporting:1, weak:2};
+    const sorted = [...points].sort((a,b) =>
+      (a.stance === "refutes" ? -1 : 0) - (b.stance === "refutes" ? -1 : 0)
+      || (order[a.weight] ?? 1) - (order[b.weight] ?? 1));
+    html += `<h2>この結論に至った論点（${points.length} 件）</h2><ol class="reasoning">` +
+      sorted.map(pt => `<li class="rp ${esc(pt.stance)}">
+        <div class="rp-head">
+          <span class="badge ${esc(pt.stance)}">${esc(STANCE_LABEL[pt.stance] || pt.stance)}</span>
+          <span class="badge w-${esc(pt.weight)}">${esc(WEIGHT_LABEL[pt.weight] || pt.weight)}</span>
+          <b>${esc(pt.point)}</b>
+        </div>
+        ${pt.finding ? `<div class="rp-find">${esc(pt.finding)}</div>` : ""}
+        ${chips(pt.evidence) || '<div class="rp-noev">検証を通った根拠なし</div>'}
+      </li>`).join("") + `</ol>`;
+  }
+  if (uncertainties.length) {
+    html += `<h2>分からなかったこと</h2><ul class="unc">` +
+      uncertainties.map(u => `<li>${esc(u)}</li>`).join("") + `</ul>`;
+  }
+  return html;
 }
 
 function chips(list) {

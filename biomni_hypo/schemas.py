@@ -138,6 +138,36 @@ class Evidence(BaseModel):
     strength: float = 0.5
 
 
+class ReasoningPoint(BaseModel):
+    """最終回答に至った論点 1 つ。
+
+    biomni の `<solution>` は既定では「採点できる短い答え」を返す設計で
+    （システムプロンプトの唯一の例が `The answer is <solution> A </solution>`）、
+    そこに至った筋道は残らない。結論だけ見せても、読んだ人はそれを
+    受け入れるか捨てるかしか選べない。
+
+    「何を確かめたか → 何が分かったか → それが結論をどう左右したか」を
+    1 単位にして、結論の組み立てを開く。根拠は他と同じ検証を通す。
+    """
+
+    #: 検討した論点。問いの形で書く（例:「FGFR2 の関連は再現しているか」）
+    point: str
+    #: 調べて分かったこと
+    finding: str = ""
+    #: この論点が結論を支持するか、反証するか、判断材料にとどまるか
+    stance: Stance = Stance.SUPPORTS
+    #: 結論への効き方。decisive = これが無ければ結論が変わる
+    weight: Literal["decisive", "supporting", "weak"] = "supporting"
+    evidence: list[Evidence] = Field(default_factory=list)
+
+    @property
+    def is_supported(self) -> bool:
+        return any(
+            e.verification_status in (VerificationStatus.VERIFIED, VerificationStatus.NOT_APPLICABLE)
+            for e in self.evidence
+        )
+
+
 class TestPlan(BaseModel):
     experiment: str = ""
     readout: str = ""
@@ -225,6 +255,10 @@ class RunResult(BaseModel):
     #: 質問への直接の回答（根拠に紐付いた要約）
     answer: str = ""
     answer_evidence: list[Evidence] = Field(default_factory=list)
+    #: 回答に至った論点。結論だけでなく組み立てを見せる（docs/design/18）
+    answer_reasoning: list[ReasoningPoint] = Field(default_factory=list)
+    #: 調べたが分からなかったこと・この回答の限界
+    answer_uncertainties: list[str] = Field(default_factory=list)
     hypotheses: list[Hypothesis] = Field(default_factory=list)
     unsupported_ideas: list[Hypothesis] = Field(default_factory=list)
     failed_citations: list[FailedCitation] = Field(default_factory=list)

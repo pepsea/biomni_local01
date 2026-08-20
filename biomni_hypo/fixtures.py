@@ -145,7 +145,9 @@ class FakeLLM:
         return _R()
 
 
-def fake_extraction_response(*, include_unknown_eid: bool = False) -> str:
+def fake_extraction_response(
+    *, include_unknown_eid: bool = False, include_reasoning: bool = True
+) -> str:
     """sample_steps() の候補 ID を前提とした、もっともらしい抽出応答。"""
     evidence = [
         {
@@ -165,7 +167,34 @@ def fake_extraction_response(*, include_unknown_eid: bool = False) -> str:
         evidence.append(
             {"eid": "E999", "stance": "supports", "claim_span": "捏造", "why": "存在しない根拠"}
         )
+    reasoning = [
+        {
+            "point": "FGFR2 の乳がんとの関連は公共データで再現するか",
+            "finding": "GWAS Catalog で FGFR2 座位が乳がんリスクと有意に関連していた",
+            "stance": "supports",
+            "weight": "decisive",
+            "evidence": [{"eid": "E1", "why": "GWAS Catalog の該当レコード"}],
+        },
+        {
+            "point": "FGFR2 依存性は乳がん細胞株で観察されるか",
+            "finding": "DepMap で乳がん系列に依存性が見られた",
+            "stance": "supports",
+            "weight": "supporting",
+            "evidence": [{"eid": "E10", "why": "DepMap の遺伝子効果スコア"}],
+        },
+        {
+            "point": "PARP 阻害剤耐性との直接の結び付きは示せたか",
+            "finding": "耐性を直接測定したデータは見つからず、関連は間接的にとどまる",
+            "stance": "refutes",
+            "weight": "decisive",
+            "evidence": [],
+        },
+    ]
     payload = {
+        "answer": "FGFR2 の発現上昇が TNBC の PARP 阻害剤耐性に関与する可能性がある。",
+        "answer_evidence": [{"eid": "E1", "why": "GWAS Catalog の関連"}],
+        "reasoning": reasoning if include_reasoning else [],
+        "uncertainties": ["FGFR2 発現量と耐性を直接結ぶ実験データは得られなかった"],
         "hypotheses": [
             {
                 "statement": "FGFR2 の発現上昇が TNBC における PARP 阻害剤耐性に寄与する",
