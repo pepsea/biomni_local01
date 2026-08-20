@@ -33,6 +33,9 @@ A1 の構築・ReAct ループ・ポリシーガード・パイプライン全�
 
 ## クイックスタート
 
+> **別の Linux マシンに入れる場合は [docs/INSTALL-linux.md](docs/INSTALL-linux.md)** に
+> まっさらな状態からの手順（Docker 導入・GPU・公開範囲・つまずいたとき）をまとめてあります。
+
 ### Linux に常設する（推奨）
 
 ```bash
@@ -346,6 +349,12 @@ scripts/         質問の実行(ask)・モデル一覧・データセット取�
 tests/           260 件。うち 244 件は外部サービス不要
 docs/design/     設計書
 ```
+
+## ドキュメント
+
+| ドキュメント | 内容 |
+| --- | --- |
+| [INSTALL-linux](docs/INSTALL-linux.md) | **別の Linux に導入する手順**（Docker / venv・GPU・公開範囲） |
 
 ## 設計書
 
