@@ -100,7 +100,18 @@ Claude のみにすると `COMPOSE_PROFILES` が空になり、
 ### ポートが衝突するとき
 
 ```
+[Errno 48] error while attempting to bind on address ('0.0.0.0', 8003): address already in use
 ports are not available: ... bind: address already in use
+```
+
+`bash scripts/start.sh` は起動前にポートを確認し、掴んでいるプロセスを名指しして止まります。
+既にこのアプリ自身が同じポートで動いている場合は、その旨だけ伝えて何も起動しません
+（二重起動して片方が落ちる、という状態を作らないため）。
+
+```bash
+lsof -nP -iTCP:8003 -sTCP:LISTEN   # 何が掴んでいるか
+make docker-down                   # Docker のコンテナなら
+bash scripts/start.sh --port 8004  # 別のポートで動かす
 ```
 
 ホストに直接入れた Ollama が 11434 を使っているのに、コンテナ版も立てようとした場合です。

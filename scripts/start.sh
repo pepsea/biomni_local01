@@ -99,13 +99,57 @@ else:
     print("      Claude API を使う:  export ANTHROPIC_API_KEY=sk-ant-...")
 PYCHECK
 
+# ポートを掴んでいるプロセスを 1 行で説明する。
+# macOS には ss が無く Linux には lsof が無いことがあるので両対応にする。
+port_holder() {
+  local port="$1"
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | awk 'NR>1 {print $1" (PID "$2", "$3")"; exit}'
+  elif command -v ss >/dev/null 2>&1; then
+    ss -ltnp "sport = :$port" 2>/dev/null | awk 'NR>1 {print $NF; exit}'
+  fi
+}
+
+# その port で応答しているのが「このアプリ自身」かどうか
+already_ours() {
+  curl -sf -m 2 "http://127.0.0.1:$1/api/health" 2>/dev/null | grep -q '"policy_version"'
+}
+
 say "待ち受け"
-ok "http://localhost:$PORT"
-if command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | grep -qE "[:.]${PORT}\b"; then
-  warn "ポート $PORT は既に使われています。--port で別のポートを指定してください"
-elif command -v lsof >/dev/null 2>&1 && lsof -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
-  warn "ポート $PORT は既に使われています。--port で別のポートを指定してください"
+if already_ours "$PORT"; then
+  ok "ポート $PORT では既にこのアプリが動いています"
+  echo
+  echo "  そのまま  http://localhost:$PORT  を開いてください。"
+  echo
+  echo "  入れ替えたい場合:"
+  echo "      make docker-rebuild                 （Docker で常設している場合）"
+  echo "      sudo systemctl restart biomni-hypo  （systemd で常設している場合）"
+  echo "  別のポートで並行して動かす場合:"
+  echo "      bash scripts/start.sh --port $((PORT + 1))"
+  exit 0
 fi
+
+HOLDER="$(port_holder "$PORT")"
+if [[ -n "$HOLDER" ]]; then
+  ng "ポート $PORT は既に使われています: $HOLDER"
+  echo
+  echo "  掴んでいるものを確認する:"
+  echo "      lsof -nP -iTCP:$PORT -sTCP:LISTEN"
+  if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Ports}}\t{{.Names}}' 2>/dev/null | grep -q ":${PORT}->"; then
+    echo
+    echo "  Docker のコンテナが使っています:"
+    docker ps --format '      {{.Names}}  {{.Ports}}' 2>/dev/null | grep ":${PORT}->"
+    echo "      make docker-down       （止める）"
+    echo "      make docker-logs       （ログを見る）"
+  fi
+  echo
+  echo "  どれかを選んでください:"
+  echo "      1) 別のポートで起動する     bash scripts/start.sh --port $((PORT + 1))"
+  echo "      2) 掴んでいるものを止める   kill <PID>  /  make docker-down"
+  echo "      3) 既定のポートを変える     .env の APP_PORT を書き換える"
+  exit 1
+fi
+ok "http://localhost:$PORT"
 
 if [[ $CHECK_ONLY -eq 1 ]]; then
   say "確認のみ（--check）"; exit 0
