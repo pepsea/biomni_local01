@@ -51,12 +51,54 @@ listens_on_all() {
   fi
 }
 
+# コンテナの中から実際に URL を叩いてみる。
+#
+# 待ち受けアドレス（127.0.0.1 か 0.0.0.0 か）から推測すると外す。
+# Docker Desktop（macOS / Windows）は host.docker.internal からホストの
+# ループバックへ転送できることがあり、Linux の host-gateway は届かない。
+# 環境ごとの正解を覚えるより、その場で試すほうが確実で短い。
+#
+#   0 = 届いた / 1 = 届かなかった / 2 = 試せなかった（イメージ未ビルドなど）
+probe_from_container() {
+  local url="$1"
+  command -v docker >/dev/null 2>&1 || return 2
+  docker compose images app 2>/dev/null | grep -q . || return 2   # 未ビルド
+  if docker compose run --rm --no-deps --entrypoint sh app \
+       -c "curl -sf -m 5 '${url}/api/tags' >/dev/null" >/dev/null 2>&1; then
+    return 0
+  fi
+  return 1
+}
+
 # その名前のコンテナが自分のものか（= compose が再利用するので衝突しない）
 ours() { docker compose ps --format '{{.Service}}' 2>/dev/null | grep -qx "$1"; }
 
+# Ollama を全インタフェースで待ち受けさせる手順。
+# ポートを必ず添えること。OLLAMA_HOST=0.0.0.0 だけ書くと既定の 11434 に戻り、
+# 別ポートで動かしている場合は設定を壊す
+ollama_host_hint() {
+  local port="$1"
+  cat <<MSG
+      ホストの Ollama を全インタフェースで待ち受けさせてください。
+      ポート（${port}）を必ず付けること。付けないと 11434 に戻ります。
+
+        Linux : sudo systemctl edit ollama
+                  [Service]
+                  Environment="OLLAMA_HOST=0.0.0.0:${port}"
+                sudo systemctl restart ollama
+        macOS : launchctl setenv OLLAMA_HOST "0.0.0.0:${port}"
+                （そのあと Ollama.app を終了して起動し直す）
+
+      設定後の確認:
+        curl -s http://localhost:${port}/api/tags >/dev/null && echo OK
+        make docker-rebuild        （このチェックがもう一度走ります）
+MSG
+}
+
 printf '\n\033[1m== 起動前チェック\033[0m\n'
-printf '  provider=%s / COMPOSE_PROFILES=%s / APP_PORT=%s / OLLAMA_PORT=%s\n' \
-       "$PROVIDER" "${PROFILES:-（空）}" "$APP_PORT" "$OLLAMA_PORT"
+printf '  provider=%s / COMPOSE_PROFILES=%s / APP_PORT=%s\n' \
+       "$PROVIDER" "${PROFILES:-（空）}" "$APP_PORT"
+printf '  OLLAMA_BASE_URL=%s\n' "${OLLAMA_URL:-（未設定）}"
 
 FAIL=0
 
@@ -122,17 +164,34 @@ else
           echo "      ollama serve  を起動してください"
         fi
         [[ $BLOCKING -eq 1 ]] && FAIL=1
-      elif ! listens_on_all "$URL_PORT"; then
-        if [[ $BLOCKING -eq 1 ]]; then ng "Ollama が 127.0.0.1 だけを待ち受けています。コンテナからは届きません"
-        else warn "Ollama が 127.0.0.1 だけを待ち受けています。コンテナからは届きません"; fi
-        echo "      Linux : sudo systemctl edit ollama"
-        echo "                [Service]"
-        echo "                Environment=\"OLLAMA_HOST=0.0.0.0\""
-        echo "              sudo systemctl restart ollama"
-        echo "      macOS : launchctl setenv OLLAMA_HOST \"0.0.0.0\" して Ollama.app を再起動"
-        [[ $BLOCKING -eq 1 ]] && FAIL=1
       else
-        ok "ホストの Ollama に到達でき、全インタフェースで待ち受けています"
+        # ホストからは届いた。次は「コンテナから届くか」。
+        # 待ち受けアドレスからの推測ではなく、実際に叩いて確かめる
+        probe_from_container "$OLLAMA_URL"
+        case $? in
+          0) ok "コンテナからホストの Ollama に到達できました（実測）" ;;
+          2)
+            if listens_on_all "$URL_PORT"; then
+              ok "ホストの Ollama は全インタフェースで待ち受けています"
+            else
+              warn "Ollama が 127.0.0.1 だけを待ち受けています"
+              echo "      コンテナから届かない可能性があります。"
+              echo "      （イメージが未ビルドのため実測できませんでした。"
+              echo "        ビルド後にもう一度このチェックが走ります）"
+              ollama_host_hint "$URL_PORT"
+            fi
+            ;;
+          *)
+            if [[ $BLOCKING -eq 1 ]]; then
+              ng "コンテナからホストの Ollama に届きません（実測）"
+              FAIL=1
+            else
+              warn "コンテナからホストの Ollama に届きません（実測）"
+              echo "      Claude は使えますが、Ollama のモデルは選べません。"
+            fi
+            ollama_host_hint "$URL_PORT"
+            ;;
+        esac
       fi
     fi
   fi

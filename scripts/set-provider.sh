@@ -93,9 +93,30 @@ has_key() { grep -qE '^ANTHROPIC_API_KEY=.+' .env; }
 #
 # 二重起動（ポート 11434 の衝突）と、9GB のモデルを 2 回持つ無駄を避けるため、
 # Ollama はホストのものだけを使う方針にしている（docs/design/21）。
+# ホストの Ollama が実際に待っているポートを見つける。
+#
+# .env の OLLAMA_PORT を信用しない。コンテナ版との衝突を避けるために
+# 11435 などへ変えた値が残っていることがあり、ホストの Ollama は
+# 11434 にいる、という食い違いが起きる（実際に起きた）。
+find_ollama_port() {
+  local configured
+  configured=$(sed -n 's/^OLLAMA_PORT=//p' .env 2>/dev/null | head -1)
+  for p in "$configured" 11434 11435; do
+    [[ -n "$p" ]] || continue
+    if curl -sf -m 2 "http://localhost:${p}/api/tags" >/dev/null 2>&1; then
+      printf '%s' "$p"; return 0
+    fi
+  done
+  printf '%s' "${configured:-11434}"   # 見つからなければ設定値のまま
+  return 1
+}
+
 use_host_ollama() {
   local port url
-  port=$(sed -n 's/^OLLAMA_PORT=//p' .env 2>/dev/null | head -1); port="${port:-11434}"
+  if port=$(find_ollama_port); then
+    ok "ホストの Ollama を :${port} で見つけました"
+  fi
+  set_env OLLAMA_PORT "$port"
 
   set_env COMPOSE_PROFILES ""            # ollama コンテナは起動しない
 
