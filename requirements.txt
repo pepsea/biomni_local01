@@ -7,8 +7,12 @@ requests>=2.31
 fastapi>=0.110
 uvicorn[standard]>=0.29
 
-# エージェント本体（Ollama 実行に必要）
-biomni>=0.0.8
+# エージェント本体（Ollama 実行に必要）。
+# バージョンを固定する。docs/design/04 の落とし穴（get_llm が stop_sequences を
+# 渡さない、database.py が default_config を見る、A1 がデータレイクを一括取得する、
+# システムプロンプトが 38.6k トークンある）は、すべて 0.0.8 の実装を読んで
+# 実測したもの。上げるときは tests/test_integration_biomni.py を通してから。
+biomni==0.0.8
 langchain-ollama>=0.2
 langchain-core>=0.3
 # Claude API を選択肢に入れる場合
@@ -29,6 +33,12 @@ PyPDF2>=3.0
 # search_google（ポリシーで拒否しているツール）のためだけに literature モジュールが
 # import する。入れないと query_pubmed ごと使えなくなるので、モジュールを通すために入れる
 googlesearch-python>=1.2
+# query_pubmed / query_arxiv は依存を「関数の中で」import するため、
+# モジュール単位の検査を素通りして、呼ばれた瞬間に落ちる（docs/design/20）。
+# query_pubmed が使えないと、エージェントは文献を引けず自分の記憶で書き始める。
+# どちらも MIT ライセンスで商用可
+pymed>=0.8.9
+arxiv>=2.1
 
 # 開発
 pytest>=8.0

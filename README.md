@@ -12,11 +12,11 @@
 
 | レイヤ | 状態 |
 | --- | --- |
-| 設計 (`docs/design/`) | ✅ 01〜19 |
+| 設計 (`docs/design/`) | ✅ 01〜20 |
 | コアパッケージ (`biomni_hypo/`) | ✅ 実装済み |
 | 検証ノートブック (`notebooks/`) | ✅ 5 本 |
 | API + SSE (`backend/`) | ✅ 実装済み・実サーバで動作確認 |
-| テスト | ✅ **298 件**（うち 16 件は実物の biomni に対する統合テスト） |
+| テスト | ✅ **304 件**（うち 16 件は実物の biomni に対する統合テスト） |
 | モデル選択 | ✅ ローカルの Ollama を読み込んで選択（ライセンス判定つき） |
 | 質問入力 | ✅ 構造化入力・テンプレート・入力検査・プロンプト確認 |
 | Web UI | ✅ 依存なしの 1 ファイル（`/`）。**解析の設計**・回答・**論点**・根拠・情報源・トレース |
@@ -99,6 +99,15 @@ Claude のみにすると `COMPOSE_PROFILES` が空になり、
 - クリックすると回答・仮説・集めた情報・実行トレースをそのまま復元
 
 詳細は [14-search-and-history.md](docs/design/14-search-and-history.md)。
+
+### 「biomni を読み込めません」と出るとき
+
+```bash
+make app-check
+```
+
+Docker ならコンテナの中で、そうでなければ手元の Python で、**実際に import して**
+理由を出します。`/api/health` の `biomni` にも版と例外が載ります。
 
 ### Ollama は起動しているのに「未接続」と出るとき
 
@@ -346,7 +355,7 @@ backend/app/     FastAPI + SSE + ラン実行ワーカー（子プロセス）+ 
   store.py       ラン保存と検索（条件も列に射影する）
 config/          resource_policy.yaml（商用限定・既定拒否）
 scripts/         質問の実行(ask)・モデル一覧・データセット取得・セットアップ
-tests/           298 件。うち 282 件は外部サービス不要
+tests/           304 件。うち 288 件は外部サービス不要
 docs/design/     設計書
 ```
 
@@ -379,6 +388,7 @@ docs/design/     設計書
 | [17-ollama-connectivity](docs/design/17-ollama-connectivity.md) | **Ollama に繋がらない**ときの切り分け |
 | [18-answer-reasoning](docs/design/18-answer-reasoning.md) | **最終回答に論点を持たせる**（biomni 既定は採点用の短答） |
 | [19-analysis-plan](docs/design/19-analysis-plan.md) | **解析の設計**（biomni が最初に立てる計画）を見えるようにする |
+| [20-lazy-tool-dependencies](docs/design/20-lazy-tool-dependencies.md) | **関数内 import のツール依存**（`No module named 'pymed'`） |
 
 ## 設計の要点
 
@@ -407,6 +417,7 @@ docs/design/     設計書
 | §4.3 | `database.py` は `default_config.llm`（既定 Claude）を使う → DB ツールが外部 API を叩く | `apply_biomni_env()` を import 前に実行 |
 | §4.4 | `A1.__init__` がデータレイクを一括ダウンロードする | `expected_data_lake_files` を明示 |
 | §4.5 | **システムプロンプトだけで `num_ctx=32768` を超える**（絞り込みなしで 38.6k トークン） | モジュールプリセットで既定 16.5k に。占有率が 40% を超えたら警告 |
+| [§20](docs/design/20-lazy-tool-dependencies.md) | ツールが依存を**関数の中で** import する（`query_pubmed` → `pymed`）。モジュール検査を素通りし、呼ばれた瞬間に落ちる。文献を引けなくなったエージェントは自分の記憶で書き始める | AST で関数内 import を読み、依存が無いツールは案内しない。`pymed` / `arxiv` を追加 |
 | [§16](docs/design/16-parsing-errors.md) | タグの無い応答を 2 回で打ち切る。画面には英文の叱責が `think` として出るだけ | `PARSING_ERROR` に分類し、原因と対処を日本語で表示。プロンプト末尾に出力形式を再掲 |
 
 ## ライセンス

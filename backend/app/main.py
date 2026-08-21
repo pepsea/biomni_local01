@@ -11,6 +11,8 @@ import functools
 import json
 import logging
 import queue as queue_mod
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -23,9 +25,11 @@ from backend.app.store import RunStore
 from backend.app.worker import spawn, terminate_tree
 from biomni_hypo.config import (
     AGENT_DEPENDENCIES,
+    ImportReport,
     Settings,
     install_hint,
     missing_dependencies,
+    probe_import,
 )
 from biomni_hypo.llm import ollama_status
 from biomni_hypo.models import ModelNotAvailable, apply_model_selection, list_local_models
@@ -43,7 +47,28 @@ from biomni_hypo.version import __version__
 
 log = logging.getLogger(__name__)
 
-app = FastAPI(title="Biomni Hypothesis Builder", version=__version__)
+@asynccontextmanager
+async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
+    """起動時に biomni を実際に import して確かめる。
+
+    ここで見つけておかないと、ユーザーが質問を投げて子プロセスが落ちるまで
+    誰も気付かない。起動ログに出しておけば `make service-logs` で分かる。
+    """
+    report = await asyncio.get_running_loop().run_in_executor(None, _biomni_probe, True)
+    if report.ok:
+        log.info("biomni %s を読み込めました（%s）", report.version, report.executable)
+    else:
+        log.error(
+            "biomni を読み込めません。エージェントは起動できません。\n"
+            "  使っている Python: %s\n"
+            "  詳しくは  /api/health  または  bash scripts/diagnose-app.sh\n%s",
+            report.executable or "?",
+            report.error,
+        )
+    yield
+
+
+app = FastAPI(title="Biomni Hypothesis Builder", version=__version__, lifespan=_lifespan)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -197,12 +222,31 @@ async def _drain(run_id: str, proc: Any, mp_queue: Any) -> None:
 # -------------------------------------------------------------- エンドポイント
 
 
+#: biomni の import 判定はキャッシュする。/api/health は頻繁に叩かれるうえ
+#: import は重い。壊れている状態は再ビルドするまで変わらないので毎回試さない
+_BIOMNI_PROBE: ImportReport | None = None
+
+
+def _biomni_probe(force: bool = False) -> ImportReport:
+    global _BIOMNI_PROBE
+    if _BIOMNI_PROBE is None or force:
+        _BIOMNI_PROBE = probe_import("biomni")
+        if not _BIOMNI_PROBE.ok:
+            log.error(
+                "biomni を import できません（%s）:\n%s",
+                _BIOMNI_PROBE.executable or "?",
+                _BIOMNI_PROBE.error,
+            )
+    return _BIOMNI_PROBE
+
+
 @app.get("/api/health")
 async def health() -> dict[str, Any]:
     st = ollama_status(SETTINGS.ollama_base_url, timeout=3)
     catalog = _catalog()
     default = catalog.default(preferred=SETTINGS.model)
     missing = missing_dependencies(AGENT_DEPENDENCIES)
+    biomni_probe = _biomni_probe()
     return {
         "api": "ok",
         "version": __version__,
@@ -211,6 +255,15 @@ async def health() -> dict[str, Any]:
             "ok": not missing,
             "missing": [{"module": d.module, "package": d.package, "why": d.why} for d in missing],
             "install": install_hint(missing),
+        },
+        # find_spec は「見つかるか」しか見ない。実際に import して確かめる。
+        # 入っているのに読み込めない（壊れた拡張、依存の非互換、途中で失敗した
+        # ビルド）を、ここで理由ごと出す
+        "biomni": {
+            "ok": biomni_probe.ok,
+            "version": biomni_probe.version,
+            "error": biomni_probe.error,
+            "python": biomni_probe.executable,
         },
         "ollama": {"reachable": st.reachable, "base_url": st.base_url, "models": st.models, "error": st.error},
         "models": {

@@ -121,9 +121,15 @@ def test_module_presets_control_the_prompt_size(policy):
 
     assert core.system_prompt_chars < full.system_prompt_chars
     assert core.context_utilization < 0.4, "CORE でも context の 4 割を超えている"
-    # 絞り込まないと num_ctx=32768 の大半をシステムプロンプトが占める。
-    # （import できないモジュールは自動で外れるので、環境によって数値は動く）
-    assert full.context_utilization > 0.7, "絞り込みなしが軽くなった。既定を見直せる"
+    # 絞り込まないと num_ctx=32768 の大きな割合をシステムプロンプトが占める。
+    #
+    # 絶対値で固定しない。数値は「どの optional パッケージが入っているか」で動く:
+    # 依存が足りないツールは自動で外れる（モジュール単位と関数内 import の両方）。
+    # 実測（この環境）: 絞り込みなし 110 tools / 74,492 chars / 57%
+    #                   CORE          47 tools / 38,129 chars / 29%
+    # scipy や rdkit を入れた環境ではもっと増える。比で見るのが正しい。
+    assert full.context_utilization > 0.5, "絞り込みなしが軽くなった。既定を見直せる"
+    assert full.context_utilization > core.context_utilization * 1.5
 
 
 def test_unimportable_modules_are_dropped(policy):
@@ -327,3 +333,34 @@ def test_token_sink_is_detached_after_the_run(policy):
         bundle = build_agent(_settings(mock), policy, tool_modules=CORE_TOOL_MODULES)
         TracingRunner(bundle, run_id="detach").run("質問", on_event=lambda k, p: None)
         assert bundle.token_stream.sink is None
+
+
+def test_tools_with_missing_lazy_imports_are_dropped(policy):
+    """関数の中で import するツールも、依存が無ければ案内しない。
+
+    モジュール単位の検査は素通りしてしまうため、呼ばれた瞬間に
+    ModuleNotFoundError になる。実測ではそこからエージェントが
+    自分の記憶で書き始めた（docs/design/20）。
+    """
+    with MockOllama() as mock:
+        bundle = build_agent(_settings(mock), policy, tool_modules=None)
+
+    offered = {a["name"] for apis in bundle.agent.module2api.values() for a in apis}
+    for name in bundle.unusable_tools:
+        assert name not in offered, f"{name} は呼べないのに案内されている"
+        assert name not in bundle.agent.system_prompt
+
+
+def test_pubmed_survives_when_pymed_is_installed(policy):
+    """query_pubmed は残ること。
+
+    文献を引けないと、エージェントは根拠を集められず自分の記憶に頼る。
+    このアプリの前提（根拠を示す）が崩れるので、ここは落としてはいけない。
+    """
+    pytest.importorskip("pymed")
+    with MockOllama() as mock:
+        bundle = build_agent(_settings(mock), policy, tool_modules=None)
+
+    offered = {a["name"] for apis in bundle.agent.module2api.values() for a in apis}
+    assert "query_pubmed" in offered
+    assert "query_pubmed" not in bundle.unusable_tools

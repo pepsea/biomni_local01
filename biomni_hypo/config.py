@@ -9,9 +9,13 @@ biomni.config.default_config はモジュール読み込み時に環境変数を
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
+import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -119,6 +123,9 @@ TOOL_DEPENDENCIES: tuple[Dependency, ...] = (
     Dependency("bs4", "beautifulsoup4", "literature（HTML 解析）"),
     Dependency("PyPDF2", "PyPDF2", "literature（PDF 抽出）"),
     Dependency("googlesearch", "googlesearch-python", "literature（Web 検索。ポリシーでは拒否ツール）"),
+    # 関数の中で import されるので、モジュール検査では見つからない（docs/design/20）
+    Dependency("pymed", "pymed", "query_pubmed（これが無いと文献を引けない）"),
+    Dependency("arxiv", "arxiv", "query_arxiv（プレプリント検索）"),
 )
 
 #: 重いので既定では入れないもの。使いたい人向けに理由を明示する
@@ -133,6 +140,80 @@ def missing_dependencies(
 ) -> list[Dependency]:
     """足りない依存を返す。空なら揃っている。"""
     return [d for d in group if not d.installed]
+
+
+@dataclass(frozen=True)
+class ImportReport:
+    """実際に import してみた結果。
+
+    `Dependency.installed` は find_spec なので「見つかるか」しか分からない。
+    インストールはされているが import すると落ちるモジュール（壊れた
+    ネイティブ拡張、依存の非互換、途中で失敗したビルド）を OK と答えてしまう。
+    原因を出せないと「biomni を読み込めません」で行き止まりになるので、
+    本当に import して例外の中身を持ち帰る。
+    """
+
+    module: str
+    ok: bool
+    version: str = ""
+    error: str = ""
+    #: 実行に使った Python（どの環境を見ているかを取り違えないため）
+    executable: str = ""
+
+
+def probe_import(module: str = "biomni", timeout: float = 60.0) -> ImportReport:
+    """別プロセスで実際に import して、成否と例外を返す。
+
+    別プロセスにする理由:
+      - biomni の import は重く、副作用（load_dotenv）もある。API プロセスに
+        持ち込みたくない
+      - segfault や無限ループで落ちても、API 本体を巻き込まない
+    """
+    code = (
+        "import json,sys,traceback\n"
+        "try:\n"
+        f"    m=__import__({module!r})\n"
+        "    v=getattr(m,'__version__','')\n"
+        "    if not v:\n"
+        "        try:\n"
+        "            from importlib.metadata import version as _v\n"
+        f"            v=_v({module!r})\n"
+        "        except Exception: v=''\n"
+        "    print(json.dumps({'ok':True,'version':str(v),'exe':sys.executable}))\n"
+        "except BaseException:\n"
+        "    print(json.dumps({'ok':False,'error':traceback.format_exc()[-2000:],"
+        "'exe':sys.executable}))\n"
+    )
+    try:
+        proc = subprocess.run(  # noqa: S603
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return ImportReport(module, False, error=f"import が {timeout:.0f} 秒で終わりませんでした")
+    except Exception as exc:  # noqa: BLE001
+        return ImportReport(module, False, error=f"{type(exc).__name__}: {exc}")
+
+    line = (proc.stdout or "").strip().splitlines()
+    payload: dict[str, Any] = {}
+    for candidate in reversed(line):  # biomni は import 時に標準出力へ書く
+        try:
+            payload = json.loads(candidate)
+            break
+        except json.JSONDecodeError:
+            continue
+    if not payload:
+        detail = (proc.stderr or proc.stdout or "").strip()[-2000:]
+        return ImportReport(module, False, error=detail or "出力を解釈できませんでした")
+    return ImportReport(
+        module=module,
+        ok=bool(payload.get("ok")),
+        version=str(payload.get("version", "")),
+        error=str(payload.get("error", "")),
+        executable=str(payload.get("exe", "")),
+    )
 
 
 def install_hint(missing: list[Dependency]) -> str:

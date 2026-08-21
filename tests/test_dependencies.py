@@ -54,3 +54,53 @@ def test_install_hint_deduplicates_and_sorts():
         Dependency("c", "pkg-a", "z"),
     ]
     assert install_hint(missing) == "pip install pkg-a pkg-b"
+
+
+# ------------------------------------------------- 関数内 import（遅延 import）
+# biomni のツールは依存を関数の中で import することがあり、モジュール単位の
+# 検査を素通りする。実測: query_pubmed が "No module named 'pymed'" で落ち、
+# 文献を引けなくなったエージェントが自分の記憶で書き始めた（docs/design/20）。
+
+
+def test_lazy_imports_are_detected():
+    import ast
+    import importlib
+    import inspect
+
+    from biomni_hypo.agent_factory import _missing_lazy_imports
+
+    mod = importlib.import_module("biomni.tool.literature")
+
+    def missing_everything(_name: str) -> bool:
+        return False
+
+    found = _missing_lazy_imports(
+        mod.query_pubmed, missing_everything, ast, inspect
+    )
+    assert "pymed" in found, "query_pubmed の関数内 import を見落としている"
+
+
+def test_lazy_imports_are_satisfied_in_this_environment():
+    """query_pubmed / query_arxiv が実際に呼べる状態であること。
+
+    ここが赤いと、エージェントは文献を引けずに自分の記憶で書き始める。
+    """
+    import importlib
+
+    for module in ("pymed", "arxiv"):
+        importlib.import_module(module)
+
+
+def test_pubmed_and_arxiv_are_declared():
+    from biomni_hypo.config import TOOL_DEPENDENCIES
+
+    declared = {d.module for d in TOOL_DEPENDENCIES}
+    assert {"pymed", "arxiv"} <= declared
+
+
+def test_biomni_is_pinned():
+    """検証済みバージョンから静かにずれないこと（docs/design/04 は 0.0.8 実測）。"""
+    from pathlib import Path
+
+    req = Path(__file__).resolve().parents[1] / "requirements.txt"
+    assert "biomni==0.0.8" in req.read_text(encoding="utf-8")

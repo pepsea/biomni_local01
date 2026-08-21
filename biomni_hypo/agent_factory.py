@@ -15,6 +15,7 @@ A1 を直接 new する箇所を他に作らないこと。
 from __future__ import annotations
 
 import logging
+import textwrap
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -86,6 +87,8 @@ class AgentBundle:
     token_stream: Any = None
     #: import できずに除外したモジュール -> 不足パッケージ
     unusable_modules: dict[str, str] = field(default_factory=dict)
+    #: 関数内 import の依存が足りず外したツール名 -> 不足パッケージ
+    unusable_tools: dict[str, str] = field(default_factory=dict)
 
     @property
     def estimated_prompt_tokens(self) -> int:
@@ -195,6 +198,7 @@ def build_agent(
     # 先に落としておく（実運用で観測した最頻の失敗モード）。
     unusable = _drop_unimportable_modules(agent)
     kept_modules = [m for m in kept_modules if m not in unusable]
+    unusable_tools = _drop_tools_with_missing_lazy_imports(agent)
     removed = _apply_tool_policy(agent, policy)
 
     # module2api を変更したので、システムプロンプトを作り直す。
@@ -212,6 +216,7 @@ def build_agent(
         system_prompt_chars=len(getattr(agent, "system_prompt", "") or ""),
         token_stream=token_stream,
         unusable_modules=unusable,
+        unusable_tools=unusable_tools,
     )
     if not agent.module2api:
         raise RuntimeError(
@@ -223,6 +228,13 @@ def build_agent(
             "import できないモジュールを除外しました: %s。入れるなら pip install %s",
             ", ".join(unusable),
             " ".join(sorted(set(unusable.values()))),
+        )
+    if unusable_tools:
+        log.warning(
+            "関数内 import の依存が足りないツールを除外しました: %s。"
+            "入れるなら pip install %s",
+            ", ".join(sorted(unusable_tools)),
+            " ".join(sorted(set(unusable_tools.values()))),
         )
     if bundle.context_utilization > CONTEXT_WARN_RATIO:
         log.warning(
@@ -292,6 +304,108 @@ def _drop_unimportable_modules(agent: Any) -> dict[str, str]:
             if tool.get("name") not in usable_names:
                 registry.remove_tool_by_name(tool["name"])
     return unusable
+
+
+def _drop_tools_with_missing_lazy_imports(agent: Any) -> dict[str, str]:
+    """関数の中で import しているツールを、その依存が無ければ外す。
+
+    biomni のツールは依存を**関数の中で** import することがある:
+
+        def query_pubmed(query, ...):
+            from pymed import PubMed      # ← モジュールを import しても通る
+
+    そのためモジュール単位の検査（_drop_unimportable_modules）を素通りし、
+    エージェントが呼んだ瞬間に ModuleNotFoundError になる。実測:
+
+        [ 2] execute     query_pubmed(...)
+        [ 3] observation Error: No module named 'pymed'
+        …
+        [34] think       Let me compile the research manually based on ...
+                         what I've found and my knowledge base
+
+    最後の行が本当の被害。文献を引けなかったエージェントは**自分の記憶で
+    書き始める**ので、根拠を示すという前提そのものが崩れる（docs/design/20）。
+    呼べないツールは最初から見せない。
+
+    Returns:
+        外したツール名 -> 不足パッケージ名
+    """
+    import ast
+    import importlib.util
+    import inspect
+
+    dropped: dict[str, str] = {}
+    cache: dict[str, bool] = {}
+
+    def available(name: str) -> bool:
+        root = name.split(".")[0]
+        if root not in cache:
+            try:
+                cache[root] = importlib.util.find_spec(root) is not None
+            except (ImportError, ValueError):
+                cache[root] = False
+        return cache[root]
+
+    for module, apis in list(agent.module2api.items()):
+        try:
+            mod = importlib.import_module(module)
+        except Exception:  # noqa: BLE001 - モジュール単位の検査で扱う
+            continue
+        kept = []
+        for api in apis:
+            name = api.get("name", "")
+            fn = getattr(mod, name, None)
+            missing = _missing_lazy_imports(fn, available, ast, inspect)
+            if missing:
+                dropped[name] = _PACKAGE_FOR_MODULE.get(missing[0], missing[0])
+            else:
+                kept.append(api)
+        if len(kept) != len(apis):
+            agent.module2api[module] = kept
+
+    registry = getattr(agent, "tool_registry", None)
+    if registry is not None:
+        for name in dropped:
+            if registry.get_tool_by_name(name) is not None:
+                registry.remove_tool_by_name(name)
+    return dropped
+
+
+def _missing_lazy_imports(fn: Any, available: Any, ast: Any, inspect: Any) -> list[str]:
+    """関数本体の import 文を読み、入っていないものを返す。
+
+    実行はしない。ソースを AST で読むだけなので副作用が無い。
+    """
+    if fn is None or not callable(fn):
+        return []
+    try:
+        tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+    except (OSError, TypeError, SyntaxError, IndentationError):
+        return []
+    # try: の中の import は、作者が不在を織り込んでいる（代替に落ちる）。
+    # これを理由にツールごと外すと、動くはずのものまで消える
+    guarded = {
+        id(n)
+        for t in ast.walk(tree)
+        if isinstance(t, ast.Try)
+        for n in ast.walk(t)
+        if isinstance(n, (ast.Import, ast.ImportFrom))
+    }
+    missing: list[str] = []
+    for node in ast.walk(tree):
+        if id(node) in guarded:
+            continue
+        if isinstance(node, ast.Import):
+            names = [a.name for a in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            # `from . import x` のような相対 import は対象外
+            names = [node.module] if node.module and node.level == 0 else []
+        else:
+            continue
+        for candidate in names:
+            if candidate and not available(candidate):
+                missing.append(candidate.split(".")[0])
+    return missing
 
 
 def _apply_tool_policy(agent: Any, policy: ResourcePolicy) -> list[str]:

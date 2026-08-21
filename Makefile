@@ -1,4 +1,4 @@
-.PHONY: help install install-min test lint notebook up api check-env doctor ollama-check models fetch check \
+.PHONY: help install install-min test lint notebook up api check-env doctor ollama-check app-check models fetch check \
 	docker-up docker-down docker-logs docker-ps docker-rebuild docker-check \
 	service-install service-status service-logs service-update service-uninstall
 
@@ -12,6 +12,7 @@ help:
 	@echo "check-env    起動せず環境だけ確認"
 	@echo "doctor       どの Python を使っているか診断（依存が入らないとき）"
 	@echo "ollama-check Ollama に繋がらないときの切り分け"
+	@echo "app-check    biomni を読み込めないときの切り分け"
 	@echo "api          uvicorn を直接起動（確認なし）"
 	@echo "models       ローカルの Ollama にあるモデルを一覧"
 	@echo "fetch        許可リストのデータセットを取得"
@@ -55,6 +56,9 @@ check-env:
 
 ollama-check:
 	bash scripts/diagnose-ollama.sh
+
+app-check:
+	bash scripts/diagnose-app.sh
 
 doctor:
 	bash scripts/doctor.sh
