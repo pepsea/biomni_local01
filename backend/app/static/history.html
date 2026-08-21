@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>調査履歴 — Biomni 仮説構築</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%F0%9F%A7%AC%3C/text%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg:#fbfbfa; --fg:#1c1b1a; --muted:#6b6a67; --line:#e3e2df; --card:#fff;
+    --accent:#3a5a9b; --warn:#8a6d1f; --err:#a03535; --ok:#2f6b45; --dim:#f4f3f1;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#1a1a19; --fg:#eceae6; --muted:#9a9894; --line:#33322f; --card:#232220;
+            --accent:#8aa9de; --warn:#d3b45f; --err:#e08a8a; --ok:#7fc79b; --dim:#2a2927; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font-size:14px; line-height:1.6;
+         font-family: system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; }
+  header { border-bottom:1px solid var(--line); padding:12px 20px; display:flex; gap:14px;
+           align-items:baseline; flex-wrap:wrap; position:sticky; top:0; background:var(--bg); z-index:5; }
+  header h1 { font-size:15px; margin:0; font-weight:650; }
+  header .meta { color:var(--muted); font-size:12.5px; }
+  header a { color:var(--accent); text-decoration:none; font-size:13px; }
+  header a:hover { text-decoration:underline; }
+  header .spacer { flex:1; }
+  main { max-width:960px; margin:0 auto; padding:20px; }
+  h2 { font-size:14px; margin:22px 0 10px; font-weight:650; }
+  .hfilters { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; align-items:center; }
+  .hfilters input[type=text] { flex:1; min-width:260px; }
+  input[type=text], select, button {
+    font:inherit; color:inherit; background:var(--card); border:1px solid var(--line);
+    border-radius:7px; padding:7px 10px; }
+  input[type=text]:focus, select:focus { outline:2px solid var(--accent); outline-offset:-1px; }
+  button { cursor:pointer; }
+  button.ghost { background:transparent; color:var(--muted); }
+  button.ghost:hover { color:var(--fg); border-color:var(--muted); }
+  .hintline { color:var(--muted); font-size:12px; margin:8px 0; }
+  .msg { border:1px solid var(--line); border-left-width:3px; border-radius:6px;
+         padding:8px 11px; margin:8px 0; font-size:13px; }
+  .msg.error { color:var(--err); border-color:var(--err); }
+  .empty { color:var(--muted); }
+  .hitem { border:1px solid var(--line); border-radius:9px; padding:12px 15px; margin-bottom:11px;
+           position:relative; cursor:pointer; background:var(--card); }
+  .hitem:hover { border-color:var(--accent); }
+  .hitem h4 { margin:0 34px 6px 0; font-size:14px; font-weight:600; }
+  .hitem .cond { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:6px; }
+  .hitem .cond span { font-size:11.5px; color:var(--muted); border:1px solid var(--line);
+                      border-radius:999px; padding:1px 8px; white-space:nowrap; }
+  .hitem .ans { color:var(--muted); font-size:13px; margin-bottom:6px; }
+  .hitem .meta { color:var(--muted); font-size:11.5px; }
+  .hitem .del { position:absolute; top:9px; right:9px; border:none; background:transparent;
+                color:var(--muted); font-size:16px; line-height:1; padding:3px 7px; border-radius:5px; }
+  .hitem .del:hover { color:var(--err); background:var(--dim); }
+</style>
+</head>
+<body>
+<header>
+  <h1>調査履歴</h1>
+  <span class="meta" id="meta">読み込み中…</span>
+  <span class="spacer"></span>
+  <a href="/">← 新しく調べる</a>
+</header>
+
+<main>
+  <div class="hfilters">
+    <input type="text" id="hq" placeholder="質問・回答・仮説・論点・遺伝子・PMID などで検索" autofocus>
+    <select id="hprovider"><option value="">プロバイダ</option></select>
+    <select id="hmodel"><option value="">モデル</option></select>
+    <select id="hmode"><option value="">モード</option></select>
+    <select id="horganism"><option value="">生物種</option></select>
+    <select id="hstatus"><option value="">状態</option></select>
+    <button class="ghost" id="hclear">条件をクリア</button>
+  </div>
+  <div id="hresult"><p class="empty">読み込み中…</p></div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const H_FILTERS = ["provider", "model", "mode", "organism", "status"];
+const MODE_LABEL = {hypothesis:"仮説生成", evidence_check:"根拠検証", data_interpretation:"データ解釈"};
+let historyTimer = null;
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const b = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(typeof b.detail === "object"
+    ? (b.detail.detail || JSON.stringify(b.detail)) : (b.detail || r.statusText));
+  return b;
+}
+
+// 検索条件を URL に載せる。リロードしても、共有しても同じ絞り込みが開く
+function syncUrl(params) {
+  const url = params.toString() ? `?${params}` : location.pathname;
+  history.replaceState(null, "", url);
+}
+
+function historyQuery() {
+  const p = new URLSearchParams();
+  const q = $("hq").value.trim(); if (q) p.set("q", q);
+  H_FILTERS.forEach(f => { const v = $("h" + f).value; if (v) p.set(f, v); });
+  syncUrl(p);
+  p.set("limit", "50");
+  return p.toString();
+}
+
+async function loadHistory() {
+  try {
+    const r = await api("/api/runs?" + historyQuery());
+    H_FILTERS.forEach(f => {
+      const el = $("h" + f), keep = el.value;
+      const label = el.options[0].textContent;
+      el.innerHTML = `<option value="">${label}</option>` +
+        (r.facets[f] || []).map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join("");
+      el.value = keep;
+    });
+    $("meta").textContent = `${r.total} 件`;
+
+    if (!r.runs.length) {
+      $("hresult").innerHTML = `<p class="empty">該当する調査がありません。</p>`;
+      return;
+    }
+    $("hresult").innerHTML =
+      `<div class="hintline">${r.total} 件中 ${r.runs.length} 件を表示</div>` +
+      r.runs.map(x => {
+        const cond = [
+          x.provider && `${x.provider} / ${x.model}`,
+          x.mode && (MODE_LABEL[x.mode] || x.mode),
+          x.organism, x.context, x.focus,
+          x.offline_mode ? "オフライン" : "",
+        ].filter(Boolean);
+        const when = (x.created_at || "").replace("T", " ").slice(0, 16);
+        return `<div class="hitem" data-id="${esc(x.id)}">
+          <button class="del" data-del="${esc(x.id)}" title="削除">×</button>
+          <h4>${esc(x.question || "(無題)")}</h4>
+          <div class="cond">${cond.map(c => `<span>${esc(c)}</span>`).join("")}</div>
+          ${x.answer ? `<div class="ans">${esc(x.answer.slice(0, 200))}${x.answer.length > 200 ? "…" : ""}</div>` : ""}
+          <div class="meta">${esc(x.status)} · 仮説 ${x.hypothesis_count ?? 0} 件 ·
+            根拠 検証済 ${x.evidence_verified ?? 0}/失敗 ${x.evidence_failed ?? 0} ·
+            ${x.step_count ?? 0} ステップ · ${x.duration_sec ? Math.round(x.duration_sec) + " 秒" : "-"} · ${when}</div>
+        </div>`;
+      }).join("");
+  } catch (e) {
+    $("hresult").innerHTML = `<div class="msg error">${esc(e.message)}</div>`;
+  }
+}
+
+$("hq").oninput = () => { clearTimeout(historyTimer); historyTimer = setTimeout(loadHistory, 250); };
+H_FILTERS.forEach(f => { $("h" + f).onchange = loadHistory; });
+$("hclear").onclick = () => {
+  $("hq").value = ""; H_FILTERS.forEach(f => { $("h" + f).value = ""; }); loadHistory();
+};
+
+document.addEventListener("click", async e => {
+  const del = e.target.closest("[data-del]");
+  if (del) {
+    e.stopPropagation();
+    if (!confirm("この調査結果を削除します。よろしいですか？")) return;
+    try { await api(`/api/runs/${del.dataset.del}`, {method:"DELETE"}); loadHistory(); }
+    catch (err) { alert(err.message); }
+    return;
+  }
+  const item = e.target.closest(".hitem");
+  // 結果の表示は本体ページに任せる。描画（計画・論点・根拠・トレース）を
+  // 2 か所に持つと必ず片方が古くなる
+  if (item) location.href = `/?run=${encodeURIComponent(item.dataset.id)}`;
+});
+
+// URL の検索条件を復元してから読む
+const initial = new URLSearchParams(location.search);
+if (initial.get("q")) $("hq").value = initial.get("q");
+loadHistory().then(() => {
+  H_FILTERS.forEach(f => { if (initial.get(f)) { $("h" + f).value = initial.get(f); } });
+  if ([...initial.keys()].some(k => H_FILTERS.includes(k))) loadHistory();
+});
+</script>
+</body>
+</html>

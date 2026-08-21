@@ -83,6 +83,56 @@ PY
 
 has_key() { grep -qE '^ANTHROPIC_API_KEY=.+' .env; }
 
+# ホストで動いている Ollama を使う。コンテナ版は起動しない。
+#
+# 二重起動（ポート 11434 の衝突）と、9GB のモデルを 2 回持つ無駄を避けるため、
+# Ollama はホストのものだけを使う方針にしている（docs/design/21）。
+use_host_ollama() {
+  local port url
+  port=$(sed -n 's/^OLLAMA_PORT=//p' .env 2>/dev/null | head -1); port="${port:-11434}"
+
+  set_env COMPOSE_PROFILES ""            # ollama コンテナは起動しない
+
+  # コンテナの中の localhost はコンテナ自身。ホストを指す名前に変える。
+  # Docker を使わないなら localhost のままでよい
+  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    url="http://host.docker.internal:${port}"
+  else
+    url="http://localhost:${port}"
+  fi
+  set_env OLLAMA_BASE_URL "$url"
+  ok "OLLAMA_BASE_URL=$url（ホストの Ollama を使います）"
+  ok "COMPOSE_PROFILES=（空）→ ollama コンテナは起動しません"
+
+  if curl -sf -m 3 "http://localhost:${port}/api/tags" >/dev/null 2>&1; then
+    local n
+    n=$(curl -sf -m 3 "http://localhost:${port}/api/tags" | grep -o '"name"' | wc -l | tr -d ' ')
+    ok "ホストの Ollama に到達（モデル ${n} 件）"
+    if [[ "$url" == *host.docker.internal* ]] && ! listens_on_all "$port"; then
+      ng "Ollama が 127.0.0.1 だけを待ち受けています。コンテナからは届きません"
+      echo "      Linux : sudo systemctl edit ollama"
+      echo "                [Service]"
+      echo "                Environment=\"OLLAMA_HOST=0.0.0.0\""
+      echo "              sudo systemctl restart ollama"
+      echo "      macOS : launchctl setenv OLLAMA_HOST \"0.0.0.0\" して Ollama.app を再起動"
+    fi
+  else
+    ng "ホストの localhost:${port} に Ollama が見つかりません"
+    echo "      ollama serve  を起動してから、もう一度実行してください"
+  fi
+}
+
+# そのポートが 0.0.0.0（全インタフェース）で待ち受けているか
+listens_on_all() {
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltn 2>/dev/null | grep -qE "(0\.0\.0\.0|\*|\[::\]):$1\b"
+  elif command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$1" -sTCP:LISTEN 2>/dev/null | grep -qE '\*:'
+  else
+    return 0   # 判定できないときは警告しない
+  fi
+}
+
 [[ -n "$KEY" ]] && set_env ANTHROPIC_API_KEY "$KEY"
 
 say "モード: $MODE"
@@ -106,16 +156,14 @@ case "$MODE" in
     set_env BIOMNI_LLM "$MODEL"
     set_env BIOMNI_SOURCE Ollama
     set_env LLM_SOURCE Ollama
-    set_env COMPOSE_PROFILES ollama
+    use_host_ollama
     ok "HYPO_PROVIDER=ollama / HYPO_MODEL=$MODEL / BIOMNI_SOURCE=Ollama"
-    ok "COMPOSE_PROFILES=ollama → Docker で ollama も起動します"
     ;;
   both)
     DEFAULT="${DEFAULT:-ollama}"
     MODEL="${MODEL:-qwen3:14b}"
     CLAUDE_MODEL="${CLAUDE_MODEL:-claude-opus-5}"
-    # ollama コンテナは常に起動する（Claude を既定にしても選択肢として残す）
-    set_env COMPOSE_PROFILES ollama
+    use_host_ollama
     set_env HYPO_MODEL "$MODEL"
     if [[ "$DEFAULT" == anthropic ]]; then
       set_env HYPO_PROVIDER anthropic
@@ -132,7 +180,6 @@ case "$MODE" in
       ok "既定は Ollama（$MODEL）。Claude の $CLAUDE_MODEL も選べます"
     fi
     set_env HYPO_OFFLINE_MODE false
-    ok "COMPOSE_PROFILES=ollama → Docker で ollama も起動します"
     warn "Claude を選んだ実行では、質問文と実行結果が Anthropic に送信されます"
     ;;
 esac

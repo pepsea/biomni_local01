@@ -15,6 +15,7 @@ A1 を直接 new する箇所を他に作らないこと。
 from __future__ import annotations
 
 import logging
+import sys
 import textwrap
 from dataclasses import dataclass, field
 from typing import Any
@@ -196,6 +197,7 @@ def build_agent(
     # import できないモジュールのツールは、案内しても実行時に必ず失敗する。
     # 案内すると「ツールを呼ぶ -> ImportError -> 直そうとする」のループに陥るので、
     # 先に落としておく（実運用で観測した最頻の失敗モード）。
+    patch_biomni_get_llm(settings, policy)
     unusable = _drop_unimportable_modules(agent)
     kept_modules = [m for m in kept_modules if m not in unusable]
     unusable_tools = _drop_tools_with_missing_lazy_imports(agent)
@@ -246,6 +248,57 @@ def build_agent(
         )
     log.info("agent built: %s tools, %s removed", tool_count, len(removed))
     return bundle
+
+
+def patch_biomni_get_llm(settings: Settings, policy: ResourcePolicy) -> bool:
+    """biomni.llm.get_llm が Claude に temperature を送らないようにする。
+
+    `biomni/tool/database.py::_query_llm_for_api()` は A1 のコンストラクタ引数を
+    見ず、`get_llm(model=..., temperature=0.0, config=default_config)` を自分で
+    呼ぶ。そして biomni の Anthropic 分岐は temperature を素通しする
+    （`biomni/llm.py:166`）。
+
+        return ChatAnthropic(model=model, temperature=temperature, ...)
+
+    Claude 4.6 以降（Opus 5 / Sonnet 5 / Opus 4.8 …）は temperature を受け付けず
+    400 を返すので、query_opentarget などの DB ツールが軒並み落ちる。実測:
+
+        {'success': False, 'error': "... 400 ... '`temperature` is deprecated
+         for this model.'"}
+
+    agent.llm を差し替えるだけでは、この経路は直らない（§4.3 と同じ構造の問題で、
+    強制ポイントが 1 つ増えたということ）。
+
+    Returns:
+        パッチを当てたら True。
+    """
+    try:
+        import biomni.llm as biomni_llm
+    except Exception:  # noqa: BLE001 - biomni が無い環境では何もしない
+        return False
+    if getattr(biomni_llm.get_llm, "_hypo_patched", False):
+        return True
+
+    original = biomni_llm.get_llm
+
+    def get_llm(*args: Any, **kwargs: Any) -> Any:
+        model = kwargs.get("model") or (args[0] if args else "") or ""
+        source = kwargs.get("source") or ""
+        looks_anthropic = str(model).startswith("claude") or source == "Anthropic"
+        if looks_anthropic and not policy.supports_temperature("anthropic", str(model)):
+            if kwargs.pop("temperature", None) is not None:
+                log.debug("%s には temperature を送りません（400 になるため）", model)
+        return original(*args, **kwargs)
+
+    get_llm._hypo_patched = True  # type: ignore[attr-defined]
+    biomni_llm.get_llm = get_llm
+    # database.py は `from biomni.llm import get_llm` で取り込むので、
+    # そちらの名前も差し替える（import 済みなら元の関数を握っている）
+    for name in ("biomni.tool.database", "biomni.tool.support_tools"):
+        module = sys.modules.get(name)
+        if module is not None and hasattr(module, "get_llm"):
+            module.get_llm = get_llm
+    return True
 
 
 def _restrict_modules(agent: Any, tool_modules: tuple[str, ...] | None) -> list[str]:

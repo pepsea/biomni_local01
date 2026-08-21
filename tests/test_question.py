@@ -186,3 +186,44 @@ def test_summary_includes_the_setting():
 )
 def test_normalise_focus(raw, expected):
     assert normalise_focus(raw) == expected
+
+
+# ---------------------------------------------- プロセス境界を跨ぐときの入力
+# Web アプリは子プロセスへ as_spec() の dict を渡す（pydantic モデルのままでは
+# 送れない）。coerce_question が dict を受けそこねると str(dict) が質問文になり、
+# 構造化入力が丸ごと無駄になる。実測で踏んだ（docs/design/21）。
+
+
+def test_coerce_accepts_a_spec_dict():
+    q = ResearchQuestion(
+        text="STAT1 阻害薬の新規対象疾患", organism="ヒト", focus=["STAT1"], max_hypotheses=5
+    )
+    restored = coerce_question(q.as_spec())
+    assert restored.text == q.text
+    assert restored.organism == "ヒト"
+    assert restored.focus == ["STAT1"]
+    assert restored.mode is q.mode
+    assert restored.max_hypotheses == 5
+
+
+def test_a_spec_dict_does_not_become_the_question_text():
+    """壊れ方の再現テスト。dict の repr が text に入ってはいけない。"""
+    spec = ResearchQuestion(text="STAT1 阻害薬の新規対象疾患", organism="ヒト").as_spec()
+    q = coerce_question(spec)
+    assert "'mode'" not in q.text
+    assert "{" not in q.text
+
+
+def test_a_round_trip_produces_the_same_prompt():
+    q = ResearchQuestion(
+        text="STAT1 阻害薬の新規対象疾患",
+        organism="ヒト",
+        context="自己免疫疾患",
+        focus=["STAT1", "JAK1"],
+    )
+    assert coerce_question(q.as_spec()).to_prompt("en") == q.to_prompt("en")
+
+
+def test_plain_strings_still_work():
+    q = coerce_question("BRCA1 と乳がんの関係")
+    assert q.text == "BRCA1 と乳がんの関係"

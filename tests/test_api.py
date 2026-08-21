@@ -1,3 +1,5 @@
+from unittest.mock import MagicMock
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -370,3 +372,39 @@ def test_delete_a_finished_run(client):
     assert client.delete("/api/runs/r_old").status_code == 200
     assert client.get("/api/runs/r_old").status_code == 404
     assert client.delete("/api/runs/r_old").status_code == 404
+
+
+def test_history_page_is_served(client):
+    r = client.get("/history")
+    assert r.status_code == 200
+    assert "調査履歴" in r.text
+    assert 'id="hq"' in r.text
+
+
+def test_the_worker_gets_a_question_it_can_rebuild(client_with_ollama, monkeypatch):
+    """API が子プロセスへ渡すものから ResearchQuestion を復元できること。
+
+    ここが壊れると、構造化入力が str(dict) になってエージェントに渡る。
+    """
+    from biomni_hypo.question import coerce_question
+
+    captured: dict = {}
+
+    def fake_spawn(run_id, question, settings_dict):
+        captured["question"] = question
+        proc = MagicMock()
+        proc.is_alive.return_value = False
+        return proc, MagicMock()
+
+    client, _mock = client_with_ollama
+    monkeypatch.setattr("backend.app.main.spawn", fake_spawn)
+    client.post("/api/runs", json={"input": {
+        "text": "STAT1 阻害薬で治療できる新規疾患を探す",
+        "mode": "hypothesis", "organism": "ヒト", "focus": ["STAT1"],
+    }})
+    assert "question" in captured, "spawn が呼ばれていない"
+    q = coerce_question(captured["question"])
+    assert q.text.startswith("STAT1 阻害薬")
+    assert q.organism == "ヒト"
+    assert q.focus == ["STAT1"]
+    assert "{" not in q.text

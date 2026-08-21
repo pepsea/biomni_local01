@@ -482,10 +482,23 @@ _PROMPT_BUILDERS_JA = {
 }
 
 
-def coerce_question(value: ResearchQuestion | str) -> ResearchQuestion:
-    """文字列でも ResearchQuestion でも受け取れるようにする。"""
+def coerce_question(value: ResearchQuestion | str | dict[str, Any]) -> ResearchQuestion:
+    """文字列でも dict でも ResearchQuestion でも受け取れるようにする。
+
+    dict を必ず扱えること。Web アプリは子プロセスへ `as_spec()` の dict を
+    渡す（プロセス境界を跨ぐので pydantic モデルのままでは送れない）。
+    ここで dict を受けそこねると `str(dict)` がそのまま質問文になり、
+
+        Research question:
+        {'text': 'STAT1 阻害薬の…', 'mode': 'hypothesis', 'organism': 'ヒト', …}
+
+    という壊れたプロンプトがエージェントに渡る。しかも organism / context /
+    focus は空のまま埋め込まれるので、構造化入力が丸ごと無駄になる。
+    """
     if isinstance(value, ResearchQuestion):
         return value
+    if isinstance(value, dict):
+        return ResearchQuestion.model_validate(value)
     return ResearchQuestion.from_text(str(value))
 
 

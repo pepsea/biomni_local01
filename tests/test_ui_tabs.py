@@ -14,12 +14,19 @@ from pathlib import Path
 
 import pytest
 
-INDEX = Path(__file__).resolve().parents[1] / "backend/app/static/index.html"
+STATIC = Path(__file__).resolve().parents[1] / "backend/app/static"
+INDEX = STATIC / "index.html"
+HISTORY = STATIC / "history.html"
 
 
 @pytest.fixture(scope="module")
 def html() -> str:
     return INDEX.read_text(encoding="utf-8")
+
+
+@pytest.fixture(scope="module")
+def history_html() -> str:
+    return HISTORY.read_text(encoding="utf-8")
 
 
 def _tab_buttons(html: str) -> set[str]:
@@ -40,9 +47,19 @@ def test_every_page_has_a_tab_button(html):
     assert not orphan, f"パネルはあるがボタンが無いタブ: {sorted(orphan)}"
 
 
-def test_the_history_tab_exists(html):
-    assert "history" in _tab_buttons(html)
-    assert "history" in _tab_pages(html)
+def test_history_is_not_a_tab_anymore(html):
+    """履歴はタブの 5 枚目ではなく独立ページ。
+
+    入力欄と結果で画面が埋まるので、タブに置くと「そこにある」と気付けない。
+    """
+    assert "history" not in _tab_buttons(html)
+    assert 'href="/history"' in html, "本体ページから履歴への導線が無い"
+
+
+def test_the_main_page_can_open_a_run_by_url(html):
+    """履歴ページは /?run=<id> で本体に飛ばす。受け側があること。"""
+    assert "openRunFromUrl" in html
+    assert 'get("run")' in html
 
 
 def test_show_tab_does_not_hardcode_the_tab_list(html):
@@ -62,23 +79,37 @@ def test_show_tab_does_not_hardcode_the_tab_list(html):
     assert ".tabpage" in src, "showTab() は .tabpage を走査して切り替えること"
 
 
-def test_history_controls_are_present(html):
+def test_history_controls_are_present(history_html):
     """検索欄とファセットが揃っているか（loadHistory が参照する id）。"""
     for element_id in ("hq", "hprovider", "hmodel", "hmode", "horganism", "hstatus",
                        "hclear", "hresult"):
-        assert f'id="{element_id}"' in html, f"#{element_id} がありません"
+        assert f'id="{element_id}"' in history_html, f"#{element_id} がありません"
 
 
-def test_history_filters_match_the_selects(html):
+def test_history_page_links_back(history_html):
+    assert 'href="/"' in history_html, "本体ページに戻る導線が無い"
+
+
+def test_history_page_is_self_contained(history_html):
+    """外部リソースを読まないこと（オフラインでも開ける）。"""
+    for bad in ("http://", "https://cdn", "<script src="):
+        assert bad not in history_html.replace(
+            "http://www.w3.org/2000/svg", ""
+        ), f"外部参照 {bad} がある"
+
+
+def test_history_filters_match_the_selects(history_html):
     """H_FILTERS と実際の <select> がずれていないこと。"""
-    declared = re.search(r"const H_FILTERS = \[(.*?)\]", html)
+    declared = re.search(r"const H_FILTERS = \[(.*?)\]", history_html)
     assert declared
     names = re.findall(r'"(\w+)"', declared.group(1))
     for n in names:
-        assert f'id="h{n}"' in html, f"H_FILTERS に {n} があるが #h{n} が無い"
+        assert f'id="h{n}"' in history_html, f"H_FILTERS に {n} があるが #h{n} が無い"
 
 
-def test_favicon_is_inlined(html):
+@pytest.mark.parametrize("page", ["index.html", "history.html"])
+def test_favicon_is_inlined(page):
     """外部リクエストを増やさず、404 もコンソールに出さない。"""
-    assert 'rel="icon"' in html
-    assert "data:image/svg+xml" in html
+    text = (STATIC / page).read_text(encoding="utf-8")
+    assert 'rel="icon"' in text
+    assert "data:image/svg+xml" in text

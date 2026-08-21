@@ -73,6 +73,17 @@ app = FastAPI(title="Biomni Hypothesis Builder", version=__version__, lifespan=_
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
+@app.get("/history", include_in_schema=False)
+async def history_page() -> FileResponse:
+    """調査履歴。別ページにしてある。
+
+    入力欄と結果表示で画面が埋まるので、履歴をタブの 5 枚目に置くと
+    「そこにある」と気付けない。独立した URL にして、条件も URL に載せる
+    （リロードしても共有しても同じ絞り込みが開く）。
+    """
+    return FileResponse(STATIC_DIR / "history.html")
+
+
 @app.get("/", include_in_schema=False)
 async def index() -> FileResponse:
     """入力用の最小 UI（依存なしの 1 ファイル）。
