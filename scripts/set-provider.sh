@@ -13,7 +13,7 @@
 #   HYPO_PROVIDER      既定のプロバイダ
 #   HYPO_MODEL         既定のモデル名
 #   BIOMNI_SOURCE      biomni の default_config が向く先（docs/design/04 §4.3）
-#   COMPOSE_PROFILES   Docker で ollama コンテナを起動するか
+#   COMPOSE_PROFILES   常に空。Ollama はホストのものだけを使う（docs/design/21）
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -26,6 +26,12 @@ usage() {
   echo "使い方: bash scripts/set-provider.sh {both|claude|ollama} \\" >&2
   echo "          [--model M] [--claude-model M] [--key K] [--port P] [--default {ollama|claude}]" >&2
 }
+
+# --help はモード解析より先に見る。$1 をモードとして食べてしまうと
+# `set-provider.sh --help` が「不明なモード」になって exit 1 する
+case "${1:-}" in
+  -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
+esac
 
 MODE="${1:-}"; shift || true
 MODEL=""; CLAUDE_MODEL=""; KEY=""; PORT=""; DEFAULT=""
@@ -101,7 +107,7 @@ use_host_ollama() {
     url="http://localhost:${port}"
   fi
   set_env OLLAMA_BASE_URL "$url"
-  ok "OLLAMA_BASE_URL=$url（ホストの Ollama を使います）"
+  ok "OLLAMA_BASE_URL=${url}（ホストの Ollama を使います）"
   ok "COMPOSE_PROFILES=（空）→ ollama コンテナは起動しません"
 
   if curl -sf -m 3 "http://localhost:${port}/api/tags" >/dev/null 2>&1; then
@@ -171,13 +177,13 @@ case "$MODE" in
       set_env BIOMNI_LLM "$CLAUDE_MODEL"
       set_env BIOMNI_SOURCE Anthropic
       set_env LLM_SOURCE Anthropic
-      ok "既定は Claude（$CLAUDE_MODEL）。Ollama の $MODEL も選べます"
+      ok "既定は Claude（${CLAUDE_MODEL}）。Ollama の $MODEL も選べます"
     else
       set_env HYPO_PROVIDER ollama
       set_env BIOMNI_LLM "$MODEL"
       set_env BIOMNI_SOURCE Ollama
       set_env LLM_SOURCE Ollama
-      ok "既定は Ollama（$MODEL）。Claude の $CLAUDE_MODEL も選べます"
+      ok "既定は Ollama（${MODEL}）。Claude の $CLAUDE_MODEL も選べます"
     fi
     set_env HYPO_OFFLINE_MODE false
     warn "Claude を選んだ実行では、質問文と実行結果が Anthropic に送信されます"

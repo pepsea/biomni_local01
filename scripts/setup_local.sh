@@ -24,7 +24,7 @@ PY=$(command -v python3.11 || command -v python3 || true)
 [[ -z "$PY" ]] && { ng "python3 が見つかりません"; exit 1; }
 VER=$("$PY" -c 'import sys; print("%d.%d" % sys.version_info[:2])')
 [[ "$(printf '%s\n3.11\n' "$VER" | sort -V | head -1)" != "3.11" ]] && {
-  ng "Python 3.11 以上が必要です（検出: $VER）"; exit 1; }
+  ng "Python 3.11 以上が必要です（検出: ${VER}）"; exit 1; }
 ok "$PY ($VER)"
 
 say "仮想環境"

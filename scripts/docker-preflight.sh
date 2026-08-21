@@ -39,6 +39,18 @@ in_use() {
   command -v lsof >/dev/null 2>&1 && lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1 && return 0
   return 1
 }
+# そのポートが 0.0.0.0（全インタフェース）で待ち受けているか。
+# 127.0.0.1 だけだと host.docker.internal 経由でコンテナから届かない（§17.4）
+listens_on_all() {
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltn 2>/dev/null | grep -qE "(0\.0\.0\.0|\*|\[::\]):$1\b"
+  elif command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$1" -sTCP:LISTEN 2>/dev/null | grep -qE '\*:'
+  else
+    return 0   # 判定できないときは警告しない
+  fi
+}
+
 # その名前のコンテナが自分のものか（= compose が再利用するので衝突しない）
 ours() { docker compose ps --format '{{.Service}}' 2>/dev/null | grep -qx "$1"; }
 
@@ -79,14 +91,49 @@ MSG
     ok "OLLAMA_PORT=$OLLAMA_PORT は使えます"
   fi
 else
-  ok "ollama コンテナは起動しません（COMPOSE_PROFILES に ollama が無い）"
-  if [[ "$PROVIDER" == ollama ]]; then
-    if [[ "$OLLAMA_URL" == *host.docker.internal* ]]; then
-      ok "ホストの Ollama を使う設定です（$OLLAMA_URL）"
+  ok "ollama コンテナは起動しません（ホストの Ollama を使う構成）"
+  # Ollama を使わない構成（Claude のみ）なら、ここは関係しない。
+  # provider=ollama なら起動しても仕事にならないので止める。
+  # そうでなければ「Ollama のモデルは選べない」という警告に留める
+  if [[ "$PROVIDER" == ollama ]]; then BLOCKING=1; else BLOCKING=0; fi
+  if [[ "$PROVIDER" == ollama || -n "$OLLAMA_URL" ]]; then
+    if [[ "$OLLAMA_URL" != *host.docker.internal* ]]; then
+      if [[ $BLOCKING -eq 1 ]]; then
+        ng "OLLAMA_BASE_URL がホストを指していません: ${OLLAMA_URL:-（未設定）}"
+        FAIL=1
+      else
+        warn "OLLAMA_BASE_URL がホストを指していません: ${OLLAMA_URL:-（未設定）}"
+        echo "      Claude は使えますが、Ollama のモデルは選べません。"
+      fi
+      echo "      コンテナの中の localhost はコンテナ自身です。ホストには届きません。"
+      echo "      直す:  bash scripts/set-provider.sh ollama    （both でも可）"
     else
-      warn "provider=ollama なのに ollama コンテナを起動しません"
-      echo "      ホストの Ollama を使うなら:  bash scripts/use-host-ollama.sh"
-      echo "      コンテナ版を使うなら:        echo 'COMPOSE_PROFILES=ollama' >> .env"
+      ok "ホストの Ollama を使う設定です: ${OLLAMA_URL}"
+      # URL のポートと、実際に Ollama が待っているポートが食い違っていないか。
+      # コンテナ版をやめたので OLLAMA_PORT は「ホストの Ollama のポート」になった。
+      URL_PORT="${OLLAMA_URL##*:}"; URL_PORT="${URL_PORT%%/*}"
+      if ! curl -sf -m 3 "http://localhost:${URL_PORT}/api/tags" >/dev/null 2>&1; then
+        if [[ $BLOCKING -eq 1 ]]; then ng "ホストの localhost:${URL_PORT} に Ollama がいません"
+        else warn "ホストの localhost:${URL_PORT} に Ollama がいません（Claude のみ使えます）"; fi
+        if curl -sf -m 3 "http://localhost:11434/api/tags" >/dev/null 2>&1; then
+          echo "      11434 では応答しています。.env の OLLAMA_PORT を 11434 に直してください:"
+          echo "          bash scripts/set-provider.sh ollama    （OLLAMA_BASE_URL も揃います）"
+        else
+          echo "      ollama serve  を起動してください"
+        fi
+        [[ $BLOCKING -eq 1 ]] && FAIL=1
+      elif ! listens_on_all "$URL_PORT"; then
+        if [[ $BLOCKING -eq 1 ]]; then ng "Ollama が 127.0.0.1 だけを待ち受けています。コンテナからは届きません"
+        else warn "Ollama が 127.0.0.1 だけを待ち受けています。コンテナからは届きません"; fi
+        echo "      Linux : sudo systemctl edit ollama"
+        echo "                [Service]"
+        echo "                Environment=\"OLLAMA_HOST=0.0.0.0\""
+        echo "              sudo systemctl restart ollama"
+        echo "      macOS : launchctl setenv OLLAMA_HOST \"0.0.0.0\" して Ollama.app を再起動"
+        [[ $BLOCKING -eq 1 ]] && FAIL=1
+      else
+        ok "ホストの Ollama に到達でき、全インタフェースで待ち受けています"
+      fi
     fi
   fi
 fi
