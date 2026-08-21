@@ -250,7 +250,7 @@ def build_agent(
     return bundle
 
 
-def patch_biomni_get_llm(settings: Settings, policy: ResourcePolicy) -> bool:
+def patch_biomni_get_llm(settings: Settings, policy: ResourcePolicy) -> bool:  # noqa: ARG001
     """biomni.llm.get_llm が Claude に temperature を送らないようにする。
 
     `biomni/tool/database.py::_query_llm_for_api()` は A1 のコンストラクタ引数を
@@ -282,12 +282,18 @@ def patch_biomni_get_llm(settings: Settings, policy: ResourcePolicy) -> bool:
     original = biomni_llm.get_llm
 
     def get_llm(*args: Any, **kwargs: Any) -> Any:
-        model = kwargs.get("model") or (args[0] if args else "") or ""
+        model = str(kwargs.get("model") or (args[0] if args else "") or "")
         source = kwargs.get("source") or ""
-        looks_anthropic = str(model).startswith("claude") or source == "Anthropic"
-        if looks_anthropic and not policy.supports_temperature("anthropic", str(model)):
-            if kwargs.pop("temperature", None) is not None:
-                log.debug("%s には temperature を送りません（400 になるため）", model)
+        looks_anthropic = model.startswith("claude") or source == "Anthropic"
+        if looks_anthropic and kwargs.pop("temperature", None) is not None:
+            # ポリシーの prefix 一覧だけを見ない。あれは新しいモデルが出るたびに
+            # 古くなり、載っていないモデルで 400 に戻る。
+            #
+            # この経路（database.py の構造化抽出）は temperature=0.0 を決め打ちで
+            # 渡してくるが、送らなければ既定値が使われるだけで済む。
+            # 「決定性が少し落ちる」と「ツールが 400 で全滅する」を比べれば、
+            # 送らないほうが明らかに軽い。
+            log.debug("%s には temperature を送りません（400 を避けるため）", model)
         return original(*args, **kwargs)
 
     get_llm._hypo_patched = True  # type: ignore[attr-defined]

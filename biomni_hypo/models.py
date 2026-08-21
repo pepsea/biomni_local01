@@ -10,6 +10,7 @@ Web アプリのモデル選択プルダウンも、ノートブックの選択�
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -233,10 +234,14 @@ def list_local_models(
             recommended=decision.recommended,
             matched_by=decision.matched_by,
         )
-        # 使えないモデルの context 長を調べても意味がないので許可済みだけ問い合わせる
-        if fetch_context_length and decision.allowed:
-            model.max_context = _max_context(base, name, timeout=timeout)
         catalog.models.append(model)
+
+    # context 長は /api/show への往復が要る。逐次に回すと、モデル数 × 応答時間だけ
+    # 画面のモデル選択欄が空のままになる（実 Ollama はモデル読み込み中に遅い）。
+    # 並列に取り、結果はキャッシュする。使えないモデルは調べても意味がないので省く。
+    if fetch_context_length:
+        targets = [m for m in catalog.models if m.local and m.allowed and not m.max_context]
+        _fill_context_lengths(base, targets, timeout=timeout)
 
     catalog.models += _cloud_models(settings, policy)
     catalog.models.sort(
@@ -295,6 +300,39 @@ def _cloud_models(settings: Settings, policy: ResourcePolicy) -> list[ModelOptio
                 )
             )
     return out
+
+
+#: (base_url, model) -> context 長。プロセスの生存中は変わらないのでキャッシュする
+_CONTEXT_CACHE: dict[tuple[str, str], int] = {}
+
+
+def _fill_context_lengths(
+    base_url: str, models: list[ModelOption], *, timeout: float = 5.0
+) -> None:
+    """複数モデルの context 長をまとめて取る（並列 + キャッシュ）。"""
+    todo = []
+    for model in models:
+        cached = _CONTEXT_CACHE.get((base_url, model.name))
+        if cached is not None:
+            model.max_context = cached
+        else:
+            todo.append(model)
+    if not todo:
+        return
+    # Ollama を叩きすぎない程度に絞る。8 並列なら 20 モデルでも 3 往復ぶん
+    with ThreadPoolExecutor(max_workers=min(8, len(todo))) as pool:
+        futures = {
+            pool.submit(_max_context, base_url, m.name, timeout=timeout): m for m in todo
+        }
+        for future in as_completed(futures):
+            model = futures[future]
+            try:
+                value = future.result()
+            except Exception as exc:  # noqa: BLE001 - 取れなくても致命ではない
+                log.debug("context 長の取得に失敗 (%s): %s", model.name, exc)
+                value = 0
+            model.max_context = value
+            _CONTEXT_CACHE[(base_url, model.name)] = value
 
 
 def _max_context(base_url: str, name: str, timeout: float = 5.0) -> int:

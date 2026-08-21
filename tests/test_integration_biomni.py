@@ -364,3 +364,55 @@ def test_pubmed_survives_when_pymed_is_installed(policy):
     offered = {a["name"] for apis in bundle.agent.module2api.values() for a in apis}
     assert "query_pubmed" in offered
     assert "query_pubmed" not in bundle.unusable_tools
+
+
+def test_the_temperature_patch_reaches_the_database_tool(policy):
+    """biomni の DB ツールが Claude に temperature を送らないこと。
+
+    database.py は `from biomni.llm import get_llm` をモジュール先頭で行い、
+    A1 の構築時に既に import 済みになる。biomni.llm を差し替えるだけでは
+    database.py が握っている古い参照は直らないので、そちらも差し替える。
+
+    実測で踏んだ失敗:
+      {'success': False, 'error': "... 400 ... '`temperature` is deprecated
+       for this model.'"}
+    """
+    import sys
+
+    with MockOllama() as mock:
+        build_agent(_settings(mock), policy, tool_modules=CORE_TOOL_MODULES)
+
+    import biomni.llm as biomni_llm
+
+    assert getattr(biomni_llm.get_llm, "_hypo_patched", False)
+    database = sys.modules.get("biomni.tool.database")
+    assert database is not None, "database.py が import されていない"
+    assert database.get_llm is biomni_llm.get_llm, "古い参照が残っている"
+
+
+def test_the_patch_does_not_depend_on_a_model_list(policy):
+    """未知の Claude モデルでも temperature を落とすこと。
+
+    prefix の一覧に頼ると、新しいモデルが出るたびに 400 に戻る。
+    """
+    import biomni.llm as biomni_llm
+
+    from biomni_hypo.agent_factory import patch_biomni_get_llm
+
+    calls: list[dict] = []
+    original = biomni_llm.get_llm
+    biomni_llm.get_llm = lambda *a, **k: calls.append(dict(k))
+    try:
+        # 既にパッチ済みなら当て直す
+        if hasattr(biomni_llm.get_llm, "_hypo_patched"):
+            delattr(biomni_llm.get_llm, "_hypo_patched")
+        patch_biomni_get_llm(Settings(), policy)
+        for model in ("claude-opus-5", "claude-future-99", "claude-3-5-sonnet-20241022"):
+            calls.clear()
+            biomni_llm.get_llm(model=model, temperature=0.0)
+            assert "temperature" not in calls[0], f"{model} に temperature を送っている"
+        calls.clear()
+        biomni_llm.get_llm(model="qwen3:14b", temperature=0.7)
+        assert calls[0]["temperature"] == 0.7, "Ollama からは落とさないこと"
+    finally:
+        biomni_llm.get_llm = original
