@@ -412,3 +412,57 @@ def test_ollama_run_does_not_route_biomni_to_anthropic(policy, monkeypatch):
     assert env["BIOMNI_SOURCE"] == "Ollama"
     assert env["LLM_SOURCE"] == "Ollama"
     assert env["BIOMNI_LLM"] == "qwen3:14b"
+
+
+# ------------------------------------------------------------ 埋め込みモデル
+# `ollama list` には並ぶが、チャットには使えない。ライセンス的には通って
+# しまう（nomic-embed-text は Apache-2.0）ので、ポリシーでは弾けない。
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["nomic-embed-text:latest", "mxbai-embed-large", "bge-m3", "all-minilm",
+     "snowflake-arctic-embed2", "text-embedding-ada"],
+)
+def test_embedding_models_are_recognised(name):
+    from biomni_hypo.models import is_embedding_model
+
+    assert is_embedding_model(name)
+
+
+@pytest.mark.parametrize("name", ["qwen3:14b", "phi4:14b", "deepseek-r1:14b", "mistral:7b"])
+def test_chat_models_are_not_mistaken_for_embeddings(name):
+    from biomni_hypo.models import is_embedding_model
+
+    assert not is_embedding_model(name)
+
+
+def test_embedding_models_are_kept_out_of_the_catalog(policy):
+    """選ばせない。選ぶと実行してから壊れる。"""
+    with MockOllama(models=[*LOCAL, ("nomic-embed-text:latest", 274_000_000, 8192)]) as mock:
+        s = Settings()
+        s.ollama_base_url = mock.base_url
+        catalog = list_local_models(s, policy, fetch_context_length=False)
+
+    assert catalog.get("nomic-embed-text:latest") is None
+    assert all("embed" not in m.name for m in catalog.models)
+
+
+def test_a_policy_blocked_set_leaves_nothing_selectable(policy):
+    """llama / gemma しか持っていない環境の再現。
+
+    「接続済み」と出るのに 1 つも選べない、という状態が起きる。
+    ここが空になること自体は正しい（商用ポリシー）。UI 側で理由を出す。
+    """
+    blocked_only = [("llama3.1:8b", 4_900_000_000, 131072), ("gemma3:12b", 8_100_000_000, 131072)]
+    with MockOllama(models=blocked_only) as mock:
+        s = Settings()
+        s.ollama_base_url = mock.base_url
+        s.anthropic_api_key = ""
+        catalog = list_local_models(s, policy, fetch_context_length=False)
+
+    assert catalog.reachable, "到達はできている"
+    assert not [m for m in catalog.selectable if m.local], "選べるローカルモデルがあってはならない"
+    blocked = [m for m in catalog.blocked if m.local]
+    assert {m.name for m in blocked} == {"llama3.1:8b", "gemma3:12b"}
+    assert all(m.license for m in blocked), "理由（ライセンス名）が空"

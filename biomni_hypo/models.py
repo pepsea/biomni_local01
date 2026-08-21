@@ -26,6 +26,18 @@ MIN_CONVERSATION_TOKENS = 8192
 #: num_ctx の候補（モデルの上限に収まる最大のものを選ぶ）
 NUM_CTX_STEPS = (8192, 16384, 32768, 65536, 131072)
 
+#: 埋め込み専用モデル。`ollama list` には並ぶが、チャットには使えない。
+#: 選ばせると「実行したら壊れる」ので、そもそも一覧に出さない。
+#: ライセンス的には通ってしまう（nomic-embed-text は Apache-2.0）ので、
+#: ポリシーでは弾けない。用途で弾く必要がある。
+EMBEDDING_MARKERS = ("embed", "embedding", "bge-", "gte-", "e5-", "minilm")
+
+
+def is_embedding_model(name: str) -> bool:
+    """埋め込み専用モデルか（チャットには使えない）。"""
+    low = name.lower()
+    return any(mark in low for mark in EMBEDDING_MARKERS)
+
 
 @dataclass
 class ModelOption:
@@ -201,6 +213,10 @@ def list_local_models(
     for entry in entries:
         name = entry.get("name") or entry.get("model") or ""
         if not name:
+            continue
+        if is_embedding_model(name):
+            # チャットに使えないものを選択肢に混ぜない（実行してから壊れる）
+            log.debug("埋め込み専用モデルを除外: %s", name)
             continue
         details = entry.get("details") or {}
         decision = policy.check_model(name)

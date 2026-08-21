@@ -11,6 +11,7 @@ import functools
 import json
 import logging
 import queue as queue_mod
+import subprocess
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -233,6 +234,38 @@ async def _drain(run_id: str, proc: Any, mp_queue: Any) -> None:
 # -------------------------------------------------------------- エンドポイント
 
 
+#: いま動いているビルドの識別子。プロセスの生存中は変わらない
+_BUILD_ID: str | None = None
+
+
+def _build_id() -> str:
+    """git のコミットか、無ければ静的ファイルの更新時刻。
+
+    Docker イメージには .git を入れていないので、コンテナの中では
+    ファイルの mtime に落ちる。どちらでも「変わったかどうか」は分かる。
+    """
+    global _BUILD_ID
+    if _BUILD_ID is not None:
+        return _BUILD_ID
+    root = Path(__file__).resolve().parents[2]
+    try:
+        proc = subprocess.run(  # noqa: S603
+            ["git", "-C", str(root), "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            _BUILD_ID = proc.stdout.strip()
+            return _BUILD_ID
+    except Exception:  # noqa: BLE001 - git が無い環境が普通にある
+        pass
+    try:
+        newest = max(f.stat().st_mtime for f in STATIC_DIR.glob("*.html"))
+        _BUILD_ID = datetime.fromtimestamp(newest, UTC).strftime("%m/%d %H:%M")
+    except Exception:  # noqa: BLE001
+        _BUILD_ID = ""
+    return _BUILD_ID
+
+
 #: biomni の import 判定はキャッシュする。/api/health は頻繁に叩かれるうえ
 #: import は重い。壊れている状態は再ビルドするまで変わらないので毎回試さない
 _BIOMNI_PROBE: ImportReport | None = None
@@ -261,6 +294,9 @@ async def health() -> dict[str, Any]:
     return {
         "api": "ok",
         "version": __version__,
+        # いま動いているのがどのコミットか。「直したはずなのに変わらない」
+        # の大半は再ビルドしていないだけなので、画面から一目で分かるようにする
+        "build": _build_id(),
         # 依存が欠けていると、ラン開始まで気付かず子プロセスで落ちる。ここで見えるようにする
         "dependencies": {
             "ok": not missing,

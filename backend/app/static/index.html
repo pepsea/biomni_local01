@@ -248,9 +248,19 @@ async function boot() {
   const [health, models, templates] = await Promise.all([
     api("/api/health"), api("/api/models"), api("/api/question/templates")]);
   const dep = health.dependencies;
-  $("meta").innerHTML = `商用モード · policy v${health.policy_version} · `
-    + (health.ollama.reachable ? "Ollama 接続済み" : `<span style="color:var(--warn)">Ollama 未接続</span>`)
-    + (dep && !dep.ok ? ` · <span style="color:var(--err)">依存不足: ${esc(dep.install)}</span>` : "");
+  // 「接続済み」だけでは足りない。繋がっていても、商用ポリシーで全部弾かれて
+  // 1 つも選べない状態がある。使える数まで出す
+  const localUsable = models.models.filter(m => m.local && m.installed && m.allowed).length;
+  const localTotal  = models.models.filter(m => m.local && m.installed).length;
+  const ollamaBit = !health.ollama.reachable
+    ? `<span style="color:var(--warn)">Ollama 未接続</span>`
+    : localUsable
+      ? `Ollama 接続済み（使えるモデル ${localUsable}/${localTotal}）`
+      : `<span style="color:var(--warn)">Ollama 接続済みだが使えるモデルなし</span>`;
+  $("meta").innerHTML = `商用モード · policy v${health.policy_version} · ` + ollamaBit
+    + (dep && !dep.ok ? ` · <span style="color:var(--err)">依存不足: ${esc(dep.install)}</span>` : "")
+    + ` · <span title="いま動いているビルド">v${esc(health.version)}${
+        health.build ? " " + esc(health.build) : ""}</span>`;
 
   MODES = templates.modes;
   $("modes").innerHTML = MODES.map(m => `<button data-mode="${m.id}" aria-pressed="${m.id===mode}">${esc(m.label)}</button>`).join("");
@@ -282,6 +292,28 @@ async function boot() {
     }).join("") + `</optgroup>`).join("");
   $("model").onchange = updateModelNote;
   window.MODELS = models.models; updateModelNote();
+
+  // 1 つも選べないときは、黙って空の選択欄を見せない。理由と次の一手を出す
+  const blocked = models.models.filter(m => m.local && m.installed && !m.allowed);
+  const anyUsable = models.models.some(m => m.installed && m.allowed);
+  if (!anyUsable) {
+    const lines = [`<div class="msg error">使えるモデルが 1 つもありません。</div>`];
+    if (blocked.length) {
+      lines.push(`<div class="msg warning">ローカルの ${blocked.length} 件は商用利用ポリシーで使えません:<br>`
+        + blocked.map(m => `・${esc(m.name)} — ${esc(m.license)}`).join("<br>")
+        + `<br><br>商用可のモデルを取得してください:<br>`
+        + `<code>ollama pull qwen3:14b</code>（Apache-2.0・推奨）<br>`
+        + `<code>ollama pull phi4:14b</code> / <code>ollama pull deepseek-r1:14b</code>（MIT）`
+        + `</div>`);
+    }
+    lines.push(`<div class="msg warning">Claude API を使うなら:<br>`
+      + `<code>bash scripts/set-provider.sh both --key sk-ant-...</code></div>`);
+    $("hints").innerHTML = lines.join("");
+  } else if (blocked.length) {
+    // 選べるものはあるが、弾かれたものもある。存在は伝えるが邪魔しない
+    $("modelNote").innerHTML += ` <span style="color:var(--muted)">`
+      + `（ローカルの ${blocked.length} 件は商用ポリシーで不可）</span>`;
+  }
 }
 // 履歴ページから ?run=<id> で飛んでくる。描画は showResult に任せる
 // （計画・論点・根拠・トレースの描画を 2 か所に持つと必ず片方が古くなる）

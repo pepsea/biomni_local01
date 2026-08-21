@@ -113,3 +113,25 @@ def test_favicon_is_inlined(page):
     text = (STATIC / page).read_text(encoding="utf-8")
     assert 'rel="icon"' in text
     assert "data:image/svg+xml" in text
+
+
+def test_unusable_models_are_explained(html):
+    """「接続済みなのに選べない」を黙って見せない。
+
+    到達できているのに商用ポリシーで全部弾かれる状態がある。
+    空の選択欄だけ出すと、利用者は何が起きたか分からない。
+    """
+    assert "使えるモデルが 1 つもありません" in html
+    assert "商用利用ポリシーで使えません" in html
+    assert "ollama pull qwen3:14b" in html, "次の一手が書かれていない"
+
+
+def test_the_header_shows_how_many_models_are_usable(html):
+    """「接続済み」だけでは足りない（0 件でも接続済みと出てしまう）。"""
+    assert "使えるモデル" in html
+    assert "接続済みだが使えるモデルなし" in html
+
+
+def test_the_header_shows_the_build(html):
+    """再ビルドし忘れを画面から見分けられるようにする。"""
+    assert "health.build" in html
