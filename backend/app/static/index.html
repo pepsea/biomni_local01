@@ -252,11 +252,15 @@ async function boot() {
   // 1 つも選べない状態がある。使える数まで出す
   const localUsable = models.models.filter(m => m.local && m.installed && m.allowed).length;
   const localTotal  = models.models.filter(m => m.local && m.installed).length;
+  // 「到達できる」と「モデルがある」は別。0 件なら、手元の ollama list とは
+  // 違う Ollama を見ている（別ポート・コンテナ版・別ユーザー）
   const ollamaBit = !health.ollama.reachable
     ? `<span style="color:var(--warn)">Ollama 未接続</span>`
-    : localUsable
-      ? `Ollama 接続済み（使えるモデル ${localUsable}/${localTotal}）`
-      : `<span style="color:var(--warn)">Ollama 接続済みだが使えるモデルなし</span>`;
+    : localTotal === 0
+      ? `<span style="color:var(--err)">Ollama にモデルが 1 件もありません</span>`
+      : localUsable
+        ? `Ollama 接続済み（使えるモデル ${localUsable}/${localTotal}）`
+        : `<span style="color:var(--warn)">Ollama 接続済みだが使えるモデルなし</span>`;
   $("meta").innerHTML = `商用モード · policy v${health.policy_version} · ` + ollamaBit
     + (dep && !dep.ok ? ` · <span style="color:var(--err)">依存不足: ${esc(dep.install)}</span>` : "")
     + ` · <span title="いま動いているビルド">v${esc(health.version)}${
@@ -298,6 +302,19 @@ async function boot() {
   const anyUsable = models.models.some(m => m.installed && m.allowed);
   if (!anyUsable) {
     const lines = [`<div class="msg error">使えるモデルが 1 つもありません。</div>`];
+    // 到達できているのにモデルが 0 件 = 別の Ollama を見ている。
+    // ポリシーで弾かれた場合とは原因も対処もまったく違うので、混ぜない
+    if (health.ollama.reachable && localTotal === 0) {
+      lines.push(`<div class="msg error">`
+        + `<b>${esc(health.ollama.base_url)}</b> には Ollama がいますが、モデルが 1 件もありません。<br>`
+        + `手元で <code>ollama list</code> にモデルが見えているなら、`
+        + `<b>アプリは別の Ollama を見ています</b>（別ポート／コンテナ版が残っている等）。<br><br>`
+        + `切り分け:<br>`
+        + `<code>make model-check</code><br>`
+        + `<code>docker ps | grep ollama</code> — 残っていれば <code>make docker-down</code><br>`
+        + `<code>bash scripts/set-provider.sh ollama</code> — 実際のポートを探して合わせます`
+        + `</div>`);
+    }
     if (blocked.length) {
       lines.push(`<div class="msg warning">ローカルの ${blocked.length} 件は商用利用ポリシーで使えません:<br>`
         + blocked.map(m => `・${esc(m.name)} — ${esc(m.license)}`).join("<br>")

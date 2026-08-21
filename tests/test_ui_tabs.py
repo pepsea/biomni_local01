@@ -135,3 +135,10 @@ def test_the_header_shows_how_many_models_are_usable(html):
 def test_the_header_shows_the_build(html):
     """再ビルドし忘れを画面から見分けられるようにする。"""
     assert "health.build" in html
+
+
+def test_an_empty_ollama_is_explained_separately(html):
+    """モデル 0 件と、ポリシーで全部弾かれた、は原因も対処も違う。"""
+    assert "モデルが 1 件もありません" in html
+    assert "別の Ollama を見ています" in html
+    assert "make model-check" in html

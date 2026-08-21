@@ -66,8 +66,15 @@ for m in rows:
     kind = "ローカル" if m["local"] else "クラウド"
     print(f"  {mark:2s} {m['name']:32s} {kind:8s} {state:22s} {reason[:40]}")
 print()
-if not usable:
-    print("  → 選べるモデルが 0 件です。")
+installed_local = [m for m in rows if m["local"] and m["installed"]]
+if not installed_local:
+    print("  → アプリが見ている Ollama には、モデルが 1 件もありません。")
+    print("     手元で `ollama list` に見えているなら、別の Ollama を見ています。")
+    print("     ・別ポートを指している        → bash scripts/set-provider.sh ollama")
+    print("     ・コンテナ版が残っている      → docker ps | grep ollama → make docker-down")
+    print("     ・別ユーザーの ollama serve   → どちらか一方に寄せる")
+elif not usable:
+    print("  → 選べるモデルが 0 件です（商用ポリシーで全部弾かれています）。")
     print("     ollama pull qwen3:14b      （Apache-2.0・推奨）")
     print("     または  bash scripts/set-provider.sh both --key sk-ant-...")
 elif d.get("default") not in {m["name"] for m in usable}:

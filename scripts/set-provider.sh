@@ -98,24 +98,53 @@ has_key() { grep -qE '^ANTHROPIC_API_KEY=.+' .env; }
 # .env の OLLAMA_PORT を信用しない。コンテナ版との衝突を避けるために
 # 11435 などへ変えた値が残っていることがあり、ホストの Ollama は
 # 11434 にいる、という食い違いが起きる（実際に起きた）。
+model_count() {   # そのポートの Ollama が持っているモデル数
+  curl -sf -m 2 "http://localhost:$1/api/tags" 2>/dev/null | grep -o '"name"' | wc -l | tr -d ' '
+}
+
 find_ollama_port() {
-  local configured
+  local configured best=0 best_port=""
   configured=$(sed -n 's/^OLLAMA_PORT=//p' .env 2>/dev/null | head -1)
+  # 「応答するか」ではなく「モデルを持っているか」で選ぶ。
+  # 空のコンテナ版が先に応答すると、モデル 0 件の Ollama を掴んでしまう
+  # （実際に起きた: 画面のモデルが全部「未取得」になる）
   for p in "$configured" 11434 11435; do
     [[ -n "$p" ]] || continue
-    if curl -sf -m 2 "http://localhost:${p}/api/tags" >/dev/null 2>&1; then
-      printf '%s' "$p"; return 0
-    fi
+    curl -sf -m 2 "http://localhost:${p}/api/tags" >/dev/null 2>&1 || continue
+    local n; n=$(model_count "$p")
+    [[ -z "$best_port" ]] && best_port="$p"      # 応答した最初のもの（保険）
+    if (( n > best )); then best=$n; best_port="$p"; fi
   done
-  printf '%s' "${configured:-11434}"   # 見つからなければ設定値のまま
+  if [[ -n "$best_port" ]]; then
+    printf '%s' "$best_port"
+    (( best > 0 )) && return 0
+    return 2      # 応答はあるがモデル 0 件
+  fi
+  printf '%s' "${configured:-11434}"
   return 1
+}
+
+# 空の ollama コンテナが残っていないか
+warn_stale_ollama_container() {
+  command -v docker >/dev/null 2>&1 || return 0
+  local names
+  names=$(docker ps --format '{{.Names}}\t{{.Ports}}' 2>/dev/null | grep -i ollama) || return 0
+  [[ -n "$names" ]] || return 0
+  ng "ollama コンテナが動いています。ホストの Ollama と取り違える原因になります"
+  printf '      %s\n' "$names"
+  echo "      止める:  docker rm -f \$(docker ps -q --filter name=ollama)"
 }
 
 use_host_ollama() {
   local port url
-  if port=$(find_ollama_port); then
-    ok "ホストの Ollama を :${port} で見つけました"
-  fi
+  port=$(find_ollama_port); local found=$?
+  case $found in
+    0) ok "ホストの Ollama を :${port} で見つけました（モデル $(model_count "$port") 件）" ;;
+    2) ng ":${port} の Ollama にはモデルが 1 件もありません"
+       echo "      手元で ollama list に見えているなら、別の Ollama を見ています。"
+       warn_stale_ollama_container ;;
+    *) ng "ホストに Ollama が見つかりません（ollama serve を起動してください）" ;;
+  esac
   set_env OLLAMA_PORT "$port"
 
   set_env COMPOSE_PROFILES ""            # ollama コンテナは起動しない

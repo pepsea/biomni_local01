@@ -466,3 +466,24 @@ def test_a_policy_blocked_set_leaves_nothing_selectable(policy):
     blocked = [m for m in catalog.blocked if m.local]
     assert {m.name for m in blocked} == {"llama3.1:8b", "gemma3:12b"}
     assert all(m.license for m in blocked), "理由（ライセンス名）が空"
+
+
+def test_an_empty_ollama_is_distinguishable_from_a_blocked_one(policy):
+    """到達できるがモデル 0 件、を「ポリシーで弾かれた」と混同しない。
+
+    実測: 画面のモデルが全部「未取得」になり、手元の `ollama list` には
+    7 件見えているのに 1 つも選べない。アプリが別の Ollama
+    （空のコンテナ版など）を見ている状態（docs/design/21 §21.15）。
+    """
+    with MockOllama(models=[]) as mock:
+        s = Settings()
+        s.ollama_base_url = mock.base_url
+        s.anthropic_api_key = ""
+        catalog = list_local_models(s, policy, fetch_context_length=False)
+
+    assert catalog.reachable, "到達自体はできている"
+    installed = [m for m in catalog.models if m.local and m.installed]
+    assert not installed, "モデルは 1 件も入っていない"
+    # 一覧に出るのは「推奨だが未取得」だけ。弾かれたモデルは 0 件
+    assert not catalog.blocked, "ポリシーで弾かれたものは無い（そもそも何も無い）"
+    assert all(not m.installed for m in catalog.models if m.local)
