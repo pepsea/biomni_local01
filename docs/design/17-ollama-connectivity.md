@@ -1,5 +1,10 @@
 # 17. 「Ollama は起動しているのにアプリからは未接続」
 
+> **追記（§21.15 以降）**: ここに出てくる `scripts/use-host-ollama.sh` は
+> `scripts/set-provider.sh ollama` に統合されました。compose から ollama
+> サービス自体を外したので、原因 2（コンテナの localhost）と、
+> 空のコンテナ版を掴む問題は構造的に起きなくなっています。
+
 ## 17.1 症状
 
 ホストで `ollama serve` が動いていて `curl localhost:11434/api/tags` も通るのに、

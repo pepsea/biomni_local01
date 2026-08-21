@@ -5,12 +5,12 @@
 # ポートを変えるには .env に:  APP_PORT=9000
 # 外部に出したくないなら:      APP_BIND=127.0.0.1
 #
-# LLM プロバイダの切り替え（.env の COMPOSE_PROFILES）:
-#   COMPOSE_PROFILES=ollama   ローカル実行。ollama コンテナも起動する（既定）
-#   COMPOSE_PROFILES=         ollama コンテナを起動しない
-#                             - Claude API のみで使う場合
-#                             - ホストに入れた Ollama を使う場合
-#                               （bash scripts/use-host-ollama.sh）
+# Ollama はホストで動いているものだけを使う。コンテナ版は持たない
+# （docs/design/21 §21.15）。同居させると:
+#   - ポート 11434 が衝突する
+#   - 9GB のモデルを二重に持つ
+#   - 空のコンテナ版をアプリが掴んで「モデルが全部 未取得」になる
+# 接続先は .env の OLLAMA_BASE_URL（bash scripts/set-provider.sh ollama が設定）
 #   docker compose logs -f app        ログを追う
 #   docker compose ps                 状態
 #   docker compose down               停止（モデルとデータは残る）
@@ -22,43 +22,6 @@
 # （docs/design/02-architecture.md §2.6）。
 
 services:
-  # Claude API だけで使うなら不要。COMPOSE_PROFILES を空にすると起動しない
-  ollama:
-    image: ollama/ollama:latest
-    container_name: biomni-ollama
-    profiles: ["ollama"]
-    restart: unless-stopped
-    ports:
-      # 既定はループバックのみ。外部には出さない
-      - "${OLLAMA_BIND:-127.0.0.1}:${OLLAMA_PORT:-11434}:11434"
-    volumes:
-      - ollama-models:/root/.ollama
-    healthcheck:
-      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 30
-      start_period: 20s
-    logging:
-      driver: json-file
-      options: {max-size: "10m", max-file: "3"}
-
-  # モデルを取ってくるだけの使い捨てサービス。取得済みなら即終了する。
-  # 初回は数 GB のダウンロードで時間がかかる。
-  ollama-pull:
-    image: ollama/ollama:latest
-    container_name: biomni-ollama-pull
-    profiles: ["ollama"]
-    restart: "no"
-    depends_on:
-      ollama:
-        condition: service_healthy
-    environment:
-      OLLAMA_HOST: http://ollama:11434
-    entrypoint: ["/bin/sh", "-c"]
-    command: >
-      'ollama pull "${HYPO_MODEL:-qwen3:14b}" && echo "pull 完了: ${HYPO_MODEL:-qwen3:14b}"'
-
   app:
     build:
       context: .
@@ -74,9 +37,9 @@ services:
       - "${APP_BIND:-0.0.0.0}:${APP_PORT:-8000}:8000"
     environment:
       # environment: は env_file: より強い。ここをベタ書きすると .env の
-      # OLLAMA_BASE_URL が無視され、scripts/use-host-ollama.sh が効かなくなる。
-      # 既定は ollama コンテナ、.env にあればそちらを使う（docs/design/17）
-      OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://ollama:11434}"
+      # OLLAMA_BASE_URL が無視され、.env の設定が効かなくなる。
+      # 既定はホストの Ollama。.env にあればそちらを使う（docs/design/17）
+      OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://host.docker.internal:11434}"
       BIOMNI_PATH: /app/data
       HYPO_WORKSPACE: /app/workspace
       HYPO_POLICY_PATH: /app/config/resource_policy.yaml
@@ -101,11 +64,6 @@ services:
       - ./data:/app/data                       # データレイク（再取得を避ける）
       - ./workspace:/app/workspace             # ラン履歴・レポート
       - ./config:/app/config:ro                # リソースポリシー
-    depends_on:
-      ollama:
-        condition: service_healthy
-        # ollama プロファイルが無効（Claude API のみ）でも app は起動する
-        required: false
     # LLM 生成コードを実行するので権限を絞る
     security_opt:
       - no-new-privileges:true
@@ -123,6 +81,3 @@ services:
     logging:
       driver: json-file
       options: {max-size: "10m", max-file: "5"}
-
-volumes:
-  ollama-models:

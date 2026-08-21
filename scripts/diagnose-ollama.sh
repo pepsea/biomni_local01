@@ -100,10 +100,10 @@ if [[ -z "$FOUND" ]]; then
   echo "      Linux:    systemctl edit ollama    ->  Environment=\"OLLAMA_HOST=0.0.0.0\""
   echo "                sudo systemctl restart ollama"
   echo
-  echo "    そのあと:  bash scripts/use-host-ollama.sh && make docker-rebuild"
+  echo "    そのあと:  bash scripts/set-provider.sh ollama && make docker-rebuild"
   echo
   echo "  ホストの Ollama を使わず、コンテナ版で完結させる場合:"
-  echo "      bash scripts/set-provider.sh ollama && make docker-up"
+  echo "      bash scripts/set-provider.sh ollama && make docker-rebuild"
   exit 1
 fi
 
@@ -117,7 +117,7 @@ else
   echo
   echo "  直す:"
   if [[ "$FOUND" == *host.docker.internal* ]]; then
-    echo "      bash scripts/use-host-ollama.sh"
+    echo "      bash scripts/set-provider.sh ollama"
   else
     echo "      .env に  OLLAMA_BASE_URL=${FOUND}  と書く"
   fi

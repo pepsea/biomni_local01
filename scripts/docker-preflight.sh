@@ -119,7 +119,7 @@ if [[ ",$PROFILES," == *",ollama,"* ]]; then
       ホストに直接入れた Ollama が動いている可能性があります。3 つのどれかを選んでください。
 
       (A) ホストの Ollama をそのまま使う（コンテナは立てない・おすすめ）
-            bash scripts/use-host-ollama.sh
+            bash scripts/set-provider.sh ollama
 
       (B) ホストの Ollama を止めて、コンテナ版を使う
             sudo systemctl stop ollama     # または起動中のプロセスを終了
@@ -134,6 +134,23 @@ MSG
   fi
 else
   ok "ollama コンテナは起動しません（ホストの Ollama を使う構成）"
+
+  # profiles を外しても、既に動いているコンテナは compose が止めない。
+  # しかも restart: unless-stopped なので再起動しても戻ってくる。
+  # 残ったまま（中身は空）だと、アプリがそちらを掴んで
+  # 「モデルが全部 未取得」になる（docs/design/21 §21.15）。
+  if command -v docker >/dev/null 2>&1 \
+     && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx biomni-ollama; then
+    ng "ollama コンテナ biomni-ollama が動いたままです"
+    docker ps --format '      {{.Names}}  {{.Ports}}  ({{.Status}})' 2>/dev/null \
+      | grep biomni-ollama
+    echo "      COMPOSE_PROFILES は空ですが、compose は既に動いているものを止めません。"
+    echo "      restart: unless-stopped なので、再起動しても戻ってきます。"
+    echo
+    echo "      消す:  make docker-stop-ollama"
+    echo "             （コンテナだけ消えます。モデルはボリュームに残ります）"
+    FAIL=1
+  fi
   # Ollama を使わない構成（Claude のみ）なら、ここは関係しない。
   # provider=ollama なら起動しても仕事にならないので止める。
   # そうでなければ「Ollama のモデルは選べない」という警告に留める

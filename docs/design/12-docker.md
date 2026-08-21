@@ -148,7 +148,7 @@ make docker-check          # 誰がそのポートを使っているかまで出
 コンテナを二重に立てない。モデルの再取得も起きない。
 
 ```bash
-bash scripts/use-host-ollama.sh
+bash scripts/set-provider.sh ollama
 make docker-rebuild
 ```
 

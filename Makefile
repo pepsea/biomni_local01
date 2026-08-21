@@ -1,5 +1,5 @@
 .PHONY: help install install-min test lint notebook up api check-env doctor ollama-check app-check model-check models fetch check \
-	docker-up docker-down docker-logs docker-ps docker-rebuild docker-check \
+	docker-up docker-down docker-logs docker-ps docker-rebuild docker-check docker-stop-ollama \
 	service-install service-status service-logs service-update service-uninstall
 
 help:
@@ -26,6 +26,7 @@ help:
 	@echo "docker-down    停止（モデルとデータは残る）"
 	@echo "docker-rebuild コード変更を反映して再起動"
 	@echo "docker-check   起動前チェックだけ（ポート衝突など）"
+	@echo "docker-stop-ollama  残った ollama コンテナを消す（ホストの Ollama を使う構成用）"
 	@echo ""
 	@echo "-- Linux に常設（systemd）--"
 	@echo "service-install   常設する（Docker + systemd）"
@@ -94,6 +95,11 @@ docker-up:
 	@echo "起動しました。http://localhost:$(APP_PORT)"
 	@echo "ポートを変えるには .env に  APP_PORT=9000  を書いて make docker-rebuild"
 	@echo "初回はモデル取得に時間がかかります:  make docker-logs"
+
+docker-stop-ollama:
+	@docker rm -f biomni-ollama biomni-ollama-pull 2>/dev/null || true
+	@echo "ollama コンテナを削除しました（モデルはボリューム ollama-models に残ります）"
+	@echo "ボリュームごと消すなら: docker volume rm biomni_local01_ollama-models"
 
 docker-check:
 	bash scripts/docker-preflight.sh

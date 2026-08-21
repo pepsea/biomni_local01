@@ -359,3 +359,54 @@ $ bash scripts/set-provider.sh ollama       # .env は 11435 を指していた
 
 11435 の空 Ollama を飛ばして 11434 を選びます。
 併せて、`ollama` という名前のコンテナが動いていれば警告し、消し方を出します。
+
+## 21.16 ollama コンテナを compose から外す
+
+§21.15 の原因を作ったのは、**profiles で無効化しても消えないコンテナ**でした。
+
+```yaml
+ollama:
+  container_name: biomni-ollama
+  profiles: ["ollama"]
+  restart: unless-stopped
+```
+
+`COMPOSE_PROFILES` を空にすると、compose はこのサービスを**無視するだけ**で、
+既に動いているコンテナは止めません。しかも `restart: unless-stopped` なので
+**再起動しても戻ってきます**。実際に 10 時間動き続けていました。
+
+```
+786677e963b9  ollama/ollama:latest  "/bin/ollama serve"  Up 10 hours (healthy)
+              127.0.0.1:11435->11434/tcp   biomni-ollama
+```
+
+`.env` はホストを指しているつもりでも、`OLLAMA_PORT=11435` がこの container を
+指していたので、**空の Ollama を見て「モデルが全部 未取得」**になっていました。
+
+ガードを足すより、**原因を消す**ほうが確実です。
+「ホストで動いている Ollama だけを使う」と決めた以上（§21.3）、
+compose に ollama サービスを持つ理由がありません。
+
+- `ollama` / `ollama-pull` サービスを削除
+- `app` の `depends_on: ollama` を削除
+- `ollama-models` ボリュームを削除
+- `OLLAMA_BASE_URL` の既定を `http://host.docker.internal:11434` に
+- `scripts/use-host-ollama.sh` を削除（`set-provider.sh ollama` に統合）
+- `COMPOSE_PROFILES` は互換のため `.env.example` に残すが、常に空
+
+既に動いてしまっているコンテナのために、掃除の口を用意します。
+
+```
+make docker-stop-ollama     # コンテナだけ消す。モデルはボリュームに残る
+```
+
+起動前チェックは、`biomni-ollama` が動いていたら**失敗**します。
+残っている限り同じ問題が再発するので、警告では足りません。
+
+### 設計としての教訓
+
+「設定で無効にできる」と「無効にすれば消える」は違います。
+`profiles` は**起動しない**だけで、**止める**わけではない。
+`restart: unless-stopped` と組み合わさると、
+**誰も起動していないのに動き続けるコンテナ**が残ります。
+選択肢を残したことが、そのまま罠になっていました。

@@ -16,7 +16,7 @@
 | コアパッケージ (`biomni_hypo/`) | ✅ 実装済み |
 | 検証ノートブック (`notebooks/`) | ✅ 5 本 |
 | API + SSE (`backend/`) | ✅ 実装済み・実サーバで動作確認 |
-| テスト | ✅ **357 件**（うち 16 件は実物の biomni に対する統合テスト） |
+| テスト | ✅ **355 件**（うち 16 件は実物の biomni に対する統合テスト） |
 | モデル選択 | ✅ ローカルの Ollama を読み込んで選択（ライセンス判定つき） |
 | 質問入力 | ✅ 構造化入力・テンプレート・入力検査・プロンプト確認 |
 | Web UI | ✅ 依存なしの静的ページ。`/` に**解析の設計**・回答・**論点**・根拠・情報源・トレース、`/history` に条件つき検索 |
@@ -79,11 +79,13 @@ bash scripts/set-provider.sh claude --key sk-ant-...   # Claude のみ
 bash scripts/set-provider.sh ollama --model qwen3:14b  # Ollama のみ
 ```
 
-Claude のみにすると `COMPOSE_PROFILES` が空になり、
-**Ollama コンテナは起動せず 9GB のモデル取得も走りません**。
+Ollama は**ホストで動いているものだけ**を使います（compose に ollama サービスは
+ありません）。同居させるとポートが衝突し、9GB のモデルを二重に持ち、
+空のコンテナ版を掴んで「モデルが全部 未取得」になるためです
+（[21](docs/design/21-web-run-fixes.md) §21.15）。
 
 いずれの場合も `HYPO_PROVIDER` / `HYPO_MODEL` / `BIOMNI_SOURCE` /
-`COMPOSE_PROFILES` の 4 つを揃えて書き換えます（手で書くと食い違いやすい箇所です）。
+`OLLAMA_BASE_URL` を揃えて書き換えます（手で書くと食い違いやすい箇所です）。
 
 > オフラインモード（`HYPO_OFFLINE_MODE=true`）はクラウドのモデルと併用できません。
 > クラウドを選ぶと画面側でもチェックが外れて無効になります。
@@ -149,7 +151,7 @@ bash scripts/start.sh --port 8004  # 別のポートで動かす
 
 ```bash
 make docker-check                    # 誰が使っているかまで出る
-bash scripts/use-host-ollama.sh      # ホストの Ollama をそのまま使う（おすすめ）
+bash scripts/set-provider.sh ollama  # ホストの Ollama を探して設定を合わせる
 make docker-rebuild
 ```
 
@@ -362,8 +364,8 @@ notebooks/       検証ハーネス（ロジックは書かない。テストで
 backend/app/     FastAPI + SSE + ラン実行ワーカー（子プロセス）+ 最小 UI
   store.py       ラン保存と検索（条件も列に射影する）
 config/          resource_policy.yaml（商用限定・既定拒否）
-scripts/         質問の実行(ask)・モデル一覧・データセット取得・セットアップ
-tests/           357 件。うち 341 件は外部サービス不要
+scripts/         起動・切り分け（doctor / ollama-check / app-check / model-check）・モデル一覧
+tests/           355 件。うち 339 件は外部サービス不要
 docs/design/     設計書
 ```
 
