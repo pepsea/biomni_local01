@@ -228,15 +228,86 @@ def build_llm(
     )
 
 
+#: 毎ターン、会話の最後尾に足す出力形式の念押し。
+#: システムプロンプトにも同じ規定はあるが、それは会話の先頭にあり、
+#: ReAct の手数が増えるほど生成位置から遠ざかる。num_ctx を超えると
+#: 古い側から落ちるので、規定そのものが消えることすらある。
+#: 60 トークン程度を毎ターン払って、規定を生成の直前に置く（docs/design/22）。
+TURN_REMINDER = (
+    "[format] Reply with your reasoning, then EXACTLY ONE tag: "
+    "<execute>...python...</execute> to run code, or "
+    "<solution>...</solution> to finish. "
+    "A reply with neither tag is discarded. Never write <observation> yourself."
+)
+
+
+def _human_message(text: str) -> Any:
+    """HumanMessage を作る（langchain を必須依存にしないため遅延 import）。"""
+    from langchain_core.messages import HumanMessage
+
+    return HumanMessage(content=text)
+
+
+class FormatReminderLLM:
+    """invoke のたびに、会話の最後尾へ出力形式の念押しを差し込む薄い包み。
+
+    biomni は `self.llm.invoke(messages)` を呼ぶだけなので、ここで messages を
+    加工すれば、biomni を触らずに「毎ターン最後尾」を実現できる。
+
+    state は書き換えない。**この呼び出しに渡す messages のコピーだけ**を変える。
+    履歴に念押しが積み上がると、それ自体が context を食うため。
+
+    属性アクセスは元の LLM に委譲する（biomni は `.model_name` や
+    `.with_structured_output()` も使う）。
+    """
+
+    def __init__(self, inner: Any, reminder: str = TURN_REMINDER) -> None:
+        self._inner = inner
+        self._reminder = reminder
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    def invoke(self, messages: Any, *args: Any, **kwargs: Any) -> Any:
+        return self._inner.invoke(self._with_reminder(messages), *args, **kwargs)
+
+    async def ainvoke(self, messages: Any, *args: Any, **kwargs: Any) -> Any:
+        return await self._inner.ainvoke(self._with_reminder(messages), *args, **kwargs)
+
+    def _with_reminder(self, messages: Any) -> Any:
+        if not isinstance(messages, list) or not messages:
+            return messages
+        last = messages[-1]
+        content = getattr(last, "content", None)
+        if not isinstance(content, str):
+            return messages          # マルチモーダル等は触らない
+        if self._reminder in content:
+            return messages          # 二重に足さない
+
+        if getattr(last, "type", "") == "human":
+            # observation は human として積まれる。そこに足すのが一番自然
+            clone = last.model_copy(update={"content": f"{content}\n\n{self._reminder}"})
+            return [*messages[:-1], clone]
+
+        # 最後が assistant のことがある（biomni は自分の出力を積んだまま
+        # generate に戻ることがある）。そこに足すと、モデルは**自分が書いた
+        # 文章の続き**として読む。指示として効かないどころか、指示文ごと
+        # 真似される。別の human メッセージとして積む。
+        return [*messages, _human_message(self._reminder)]
+
+
 def build_agent_llm(settings: Settings) -> tuple[Any, TokenStreamHandler]:
     """A1 に差し込む LLM と、そのトークンストリームのハンドラ。
 
     stop シーケンス付きが必須（§4.1）。ハンドラは戻り値で受け取って、
     ランごとに sink を差し替える。
+
+    さらに、毎ターンの出力形式の念押しで包む（§22）。タグ無し応答で
+    biomni に差し戻される事故を減らすため。
     """
     handler = TokenStreamHandler()
     llm = build_llm(settings, stop=AGENT_STOP_SEQUENCES, callbacks=[handler])
-    return llm, handler
+    return FormatReminderLLM(llm), handler
 
 
 def hallucinated_observation(raw_text: str) -> bool:

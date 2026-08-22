@@ -367,6 +367,18 @@ def resolve_num_ctx(model: ModelOption | None, requested: int, prompt_tokens: in
     notes = []
     if resolved < requested:
         notes.append(f"{model.name} の上限 {model.max_context:,} に合わせて {requested:,} から丸めました")
+    elif model.max_context > resolved:
+        # 上限より小さい値を使う理由が無い。
+        # ReAct は 1 手あたり数千トークン積むので（observation は biomni が
+        # 10K 文字で切るが、それでも約 3k トークン）、num_ctx=32768 では
+        # 5 手ほどで溢れる。溢れると古い側から落ち、先頭のシステムプロンプト
+        # ＝タグの規定が消えて「タグ無し応答」になる（docs/design/22）。
+        # 空いている容量は使う。
+        resolved = model.max_context
+        notes.append(
+            f"{model.name} の上限 {model.max_context:,} まで num_ctx を上げました"
+            f"（要求は {requested:,}）"
+        )
 
     if prompt_tokens:
         remaining = resolved - prompt_tokens
@@ -375,7 +387,31 @@ def resolve_num_ctx(model: ModelOption | None, requested: int, prompt_tokens: in
                 f"システムプロンプト {prompt_tokens:,} トークンを引くと残り {remaining:,} しかありません。"
                 f"ツールモジュールを減らすか、context の大きいモデルを選んでください"
             )
+        else:
+            steps = estimate_steps_until_full(resolved, prompt_tokens)
+            if steps < 10:
+                notes.append(
+                    f"この設定では約 {steps} 手で context が埋まります"
+                    f"（残り {remaining:,} トークン）。埋まると古い側から落ち、"
+                    f"タグの規定が消えて「タグ無し応答」になります"
+                )
     return resolved, " / ".join(notes)
+
+
+#: ReAct 1 手あたりに積まれるトークンの目安。
+#: think(約 800 字) + execute(約 600 字) + observation(biomni が 10K 字で切る)
+#: を 1 トークン ≈ 3.5 文字で割ったもの。実トレースからの概算。
+TOKENS_PER_STEP = 3300
+
+
+def estimate_steps_until_full(num_ctx: int, prompt_tokens: int) -> int:
+    """context が埋まるまでの手数の目安。
+
+    max_steps を 60 にしていても、実際にはここで頭打ちになる。
+    「60 手回せるつもりが 5 手で崩れる」を、設定した時点で見えるようにする。
+    """
+    remaining = max(0, num_ctx - prompt_tokens)
+    return remaining // TOKENS_PER_STEP
 
 
 class ModelNotAvailable(ValueError):

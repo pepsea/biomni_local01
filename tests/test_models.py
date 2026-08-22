@@ -153,9 +153,38 @@ def test_num_ctx_is_clamped_to_the_model_limit(catalog):
     assert "丸めました" in note
 
 
-def test_num_ctx_under_the_limit_is_kept(catalog):
+def test_num_ctx_is_raised_to_the_model_limit(catalog):
+    """上限より小さい値を使う理由が無い。
+
+    ReAct は 1 手あたり数千トークン積むので、num_ctx=32768 では 5 手ほどで
+    溢れる。溢れると古い側から落ち、先頭のシステムプロンプト＝タグの規定が
+    消えて「タグ無し応答」になる（docs/design/22）。空いている容量は使う。
+    """
     resolved, note = resolve_num_ctx(catalog.get("qwen3:14b"), 32768)
-    assert resolved == 32768 and note == ""
+    assert resolved == 40960, "モデルの上限まで上げること"
+    assert "上限" in note
+
+
+def test_num_ctx_at_the_limit_needs_no_note(catalog):
+    resolved, note = resolve_num_ctx(catalog.get("qwen3:14b"), 40960)
+    assert resolved == 40960 and note == ""
+
+
+def test_the_step_budget_is_warned_about(catalog):
+    """max_steps を 60 にしても、context が先に尽きることを見せる。"""
+    from biomni_hypo.models import estimate_steps_until_full
+
+    resolved, note = resolve_num_ctx(catalog.get("qwen3:14b"), 32768, prompt_tokens=16500)
+    assert "手で context が埋まります" in note
+    assert estimate_steps_until_full(resolved, 16500) < 10
+
+
+def test_a_bigger_context_buys_more_steps():
+    from biomni_hypo.models import estimate_steps_until_full
+
+    small = estimate_steps_until_full(32768, 16500)
+    big = estimate_steps_until_full(131072, 16500)
+    assert big > small * 3, "context を増やせば手数が伸びること"
 
 
 def test_warns_when_the_system_prompt_eats_the_context(catalog):

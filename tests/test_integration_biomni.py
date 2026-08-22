@@ -128,7 +128,9 @@ def test_module_presets_control_the_prompt_size(policy):
     # 実測（この環境）: 絞り込みなし 110 tools / 74,492 chars / 57%
     #                   CORE          47 tools / 38,129 chars / 29%
     # scipy や rdkit を入れた環境ではもっと増える。比で見るのが正しい。
-    assert full.context_utilization > 0.5, "絞り込みなしが軽くなった。既定を見直せる"
+    # num_ctx はモデルの上限まで自動で上がるので（§22）、占有率は下がる。
+    # 絶対値ではなく「絞り込みなしは CORE より明確に重い」で見る
+    assert full.context_utilization > 0.4, "絞り込みなしが軽くなった。既定を見直せる"
     assert full.context_utilization > core.context_utilization * 1.5
 
 

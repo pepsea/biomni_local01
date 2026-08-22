@@ -12,11 +12,11 @@
 
 | レイヤ | 状態 |
 | --- | --- |
-| 設計 (`docs/design/`) | ✅ 01〜21 |
+| 設計 (`docs/design/`) | ✅ 01〜22 |
 | コアパッケージ (`biomni_hypo/`) | ✅ 実装済み |
 | 検証ノートブック (`notebooks/`) | ✅ 5 本 |
 | API + SSE (`backend/`) | ✅ 実装済み・実サーバで動作確認 |
-| テスト | ✅ **355 件**（うち 16 件は実物の biomni に対する統合テスト） |
+| テスト | ✅ **371 件**（うち 16 件は実物の biomni に対する統合テスト） |
 | モデル選択 | ✅ ローカルの Ollama を読み込んで選択（ライセンス判定つき） |
 | 質問入力 | ✅ 構造化入力・テンプレート・入力検査・プロンプト確認 |
 | Web UI | ✅ 依存なしの静的ページ。`/` に**解析の設計**・回答・**論点**・根拠・情報源・トレース、`/history` に条件つき検索 |
@@ -365,7 +365,7 @@ backend/app/     FastAPI + SSE + ラン実行ワーカー（子プロセス）+ 
   store.py       ラン保存と検索（条件も列に射影する）
 config/          resource_policy.yaml（商用限定・既定拒否）
 scripts/         起動・切り分け（doctor / ollama-check / app-check / model-check）・モデル一覧
-tests/           355 件。うち 339 件は外部サービス不要
+tests/           371 件。うち 355 件は外部サービス不要
 docs/design/     設計書
 ```
 
@@ -400,6 +400,7 @@ docs/design/     設計書
 | [19-analysis-plan](docs/design/19-analysis-plan.md) | **解析の設計**（biomni が最初に立てる計画）を見えるようにする |
 | [20-lazy-tool-dependencies](docs/design/20-lazy-tool-dependencies.md) | **関数内 import のツール依存**（`No module named 'pymed'`） |
 | [21-web-run-fixes](docs/design/21-web-run-fixes.md) | Web 経由のランで踏んだ不具合（構造化入力・Claude の temperature・Ollama・履歴） |
+| [22-context-budget](docs/design/22-context-budget.md) | **context が先に尽きる**（60 手回すつもりが 5 手で崩れる） |
 
 ## 設計の要点
 
