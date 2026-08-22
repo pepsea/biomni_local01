@@ -298,12 +298,22 @@ def patch_biomni_get_llm(settings: Settings, policy: ResourcePolicy) -> bool:  #
 
     get_llm._hypo_patched = True  # type: ignore[attr-defined]
     biomni_llm.get_llm = get_llm
-    # database.py は `from biomni.llm import get_llm` で取り込むので、
-    # そちらの名前も差し替える（import 済みなら元の関数を握っている）
-    for name in ("biomni.tool.database", "biomni.tool.support_tools"):
-        module = sys.modules.get(name)
-        if module is not None and hasattr(module, "get_llm"):
+
+    # `from biomni.llm import get_llm` で取り込んだモジュールは、**自分の名前空間に
+    # 元の関数オブジェクトを束縛している**。biomni.llm を差し替えても、そちらは
+    # 古いままになる。biomni 0.0.8 で先頭 import しているのは 5 つ:
+    #   agent/a1.py, agent/react.py, agent/qa_llm.py,
+    #   agent/function_generator.py, tool/database.py, tool/genomics.py
+    # 名前を並べると、biomni の更新で増えたときに漏れる。
+    # 「元の関数を握っているモジュール」を実際に探して差し替える。
+    patched = 0
+    for module in list(sys.modules.values()):
+        if module is None or module is biomni_llm:
+            continue
+        if getattr(module, "get_llm", None) is original:
             module.get_llm = get_llm
+            patched += 1
+    log.debug("get_llm を差し替えたモジュール: %d 件", patched)
     return True
 
 

@@ -410,3 +410,36 @@ make docker-stop-ollama     # コンテナだけ消す。モデルはボリュ�
 `restart: unless-stopped` と組み合わさると、
 **誰も起動していないのに動き続けるコンテナ**が残ります。
 選択肢を残したことが、そのまま罠になっていました。
+
+
+## 21.17 パッチ対象を名前で並べない
+
+§21.12 のパッチは、差し替えるモジュールを手で並べていました。
+
+```python
+for name in ("biomni.tool.database", "biomni.tool.support_tools"):
+```
+
+`support_tools` はそもそも `get_llm` を使っておらず、逆に **使っているのに
+書いていないモジュールが 4 つ**ありました。
+
+```
+$ grep -rl "^from biomni.llm import get_llm" biomni/
+  agent/a1.py  agent/react.py  agent/qa_llm.py
+  agent/function_generator.py  tool/database.py  tool/genomics.py
+```
+
+`from biomni.llm import get_llm` は**自分の名前空間に元の関数オブジェクトを
+束縛**します。`biomni.llm` を差し替えても、そちらは古いままです。
+
+名前を並べる限り、biomni の更新で増えたときに漏れます。
+**「元の関数を握っているモジュール」を実際に探して**差し替えます。
+
+```python
+for module in list(sys.modules.values()):
+    if getattr(module, "get_llm", None) is original:
+        module.get_llm = get_llm
+```
+
+テストも「database.py が直っているか」ではなく、
+**「古い参照を握ったままのモジュールが 1 つも無いこと」**を見ます。

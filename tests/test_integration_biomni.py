@@ -391,6 +391,18 @@ def test_the_temperature_patch_reaches_the_database_tool(policy):
     assert database is not None, "database.py が import されていない"
     assert database.get_llm is biomni_llm.get_llm, "古い参照が残っている"
 
+    # 名前を並べず、握っているモジュールを実際に探して差し替えているので、
+    # import 済みのものに漏れが無いこと（biomni の更新で増えても効く）
+    stale = [
+        name
+        for name, module in sys.modules.items()
+        if module is not None
+        and name.startswith("biomni.")
+        and getattr(module, "get_llm", None) is not None
+        and not getattr(module.get_llm, "_hypo_patched", False)
+    ]
+    assert not stale, f"古い get_llm を握ったままのモジュール: {stale}"
+
 
 def test_the_patch_does_not_depend_on_a_model_list(policy):
     """未知の Claude モデルでも temperature を落とすこと。
