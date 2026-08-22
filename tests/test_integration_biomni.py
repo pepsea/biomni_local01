@@ -404,29 +404,96 @@ def test_the_temperature_patch_reaches_the_database_tool(policy):
     assert not stale, f"古い get_llm を握ったままのモジュール: {stale}"
 
 
-def test_the_patch_does_not_depend_on_a_model_list(policy):
-    """未知の Claude モデルでも temperature を落とすこと。
+def test_the_anthropic_client_really_has_no_temperature(policy, monkeypatch):
+    """**本物の** get_llm を通して、出来上がったクライアントを調べる。
 
-    prefix の一覧に頼ると、新しいモデルが出るたびに 400 に戻る。
+    ここを stub で検証してはいけない。biomni の get_llm は
+
+        if temperature is None: temperature = config.temperature   # 0.7
+        if temperature is None: temperature = 0.7
+
+    と自分で埋め直す（biomni/llm.py:38,52）。kwargs から temperature を
+    消すだけの実装は、この既定値の埋め直しで 0.7 が入り、400 が消えない。
+    stub を相手にすると「kwargs に無い」ことしか確かめられず、素通しする。
     """
+    pytest.importorskip("langchain_anthropic")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+
+    import biomni.llm as biomni_llm
+    from biomni.config import default_config
+
+    from biomni_hypo.agent_factory import patch_biomni_get_llm
+
+    settings = Settings()
+    settings.anthropic_api_key = "sk-ant-test"
+    patch_biomni_get_llm(settings, policy)
+
+    # database.py::_query_llm_for_api とまったく同じ呼び方
+    for kwargs in (
+        {"model": "claude-opus-5", "temperature": 0.0, "api_key": "sk-ant-test"},
+        {"model": "claude-opus-5", "temperature": 0.0, "config": default_config},
+        {"model": "claude-3-5-sonnet-20241022", "temperature": 0.0},
+    ):
+        llm = biomni_llm.get_llm(**kwargs)
+        assert type(llm).__name__ == "ChatAnthropic"
+        assert llm.temperature is None, (
+            f"{kwargs['model']} に temperature={llm.temperature} が入っている。"
+            "400 になる"
+        )
+
+
+def test_ollama_still_gets_its_temperature(policy, monkeypatch):
+    """Anthropic 以外は素通しすること（決定性を落とさない）。"""
     import biomni.llm as biomni_llm
 
     from biomni_hypo.agent_factory import patch_biomni_get_llm
 
-    calls: list[dict] = []
-    original = biomni_llm.get_llm
-    biomni_llm.get_llm = lambda *a, **k: calls.append(dict(k))
-    try:
-        # 既にパッチ済みなら当て直す
-        if hasattr(biomni_llm.get_llm, "_hypo_patched"):
-            delattr(biomni_llm.get_llm, "_hypo_patched")
-        patch_biomni_get_llm(Settings(), policy)
-        for model in ("claude-opus-5", "claude-future-99", "claude-3-5-sonnet-20241022"):
-            calls.clear()
-            biomni_llm.get_llm(model=model, temperature=0.0)
-            assert "temperature" not in calls[0], f"{model} に temperature を送っている"
-        calls.clear()
-        biomni_llm.get_llm(model="qwen3:14b", temperature=0.7)
-        assert calls[0]["temperature"] == 0.7, "Ollama からは落とさないこと"
-    finally:
-        biomni_llm.get_llm = original
+    patch_biomni_get_llm(Settings(), policy)
+    llm = biomni_llm.get_llm(model="qwen3:14b", temperature=0.7, source="Ollama")
+    assert type(llm).__name__ == "ChatOllama"
+    assert llm.temperature == 0.7
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        ({"model": "claude-opus-5"}, "Anthropic"),
+        ({"model": "qwen3:14b", "source": "Ollama"}, "Ollama"),
+        ({"model": "qwen3:14b"}, ""),
+        ({}, "Anthropic"),                       # biomni の既定は claude-3-5-sonnet
+    ],
+)
+def test_source_resolution_matches_biomni(kwargs, expected):
+    """model / source の決め方が biomni とずれていないこと。
+
+    ずれると Anthropic なのに素通しして 400 に戻る。
+    """
+    from biomni_hypo.agent_factory import _resolve_model_and_source
+
+    _model, source = _resolve_model_and_source((), dict(kwargs))
+    assert source == expected
+
+
+def test_the_patch_picks_up_new_settings(policy, monkeypatch):
+    """パッチは 1 プロセス 1 回しか当たらないが、settings は毎回更新すること。
+
+    クロージャに閉じ込めると、最初のランの settings が居座る。
+    プロバイダやキーを変えた 2 回目以降のランで、古いキーを使う。
+    """
+    pytest.importorskip("langchain_anthropic")
+    import biomni.llm as biomni_llm
+
+    from biomni_hypo.agent_factory import patch_biomni_get_llm
+
+    first = Settings()
+    first.anthropic_api_key = "sk-ant-one"
+    patch_biomni_get_llm(first, policy)
+    llm = biomni_llm.get_llm(model="claude-opus-5", temperature=0.0)
+    assert llm.anthropic_api_key.get_secret_value() == "sk-ant-one"
+
+    second = Settings()
+    second.anthropic_api_key = "sk-ant-two"
+    patch_biomni_get_llm(second, policy)          # 既にパッチ済みでも
+    llm = biomni_llm.get_llm(model="claude-opus-5", temperature=0.0)
+    assert llm.anthropic_api_key.get_secret_value() == "sk-ant-two", "古い settings が居座っている"
+    assert llm.temperature is None

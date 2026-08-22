@@ -443,3 +443,74 @@ for module in list(sys.modules.values()):
 
 テストも「database.py が直っているか」ではなく、
 **「古い参照を握ったままのモジュールが 1 つも無いこと」**を見ます。
+
+
+## 21.18 temperature を「消す」のでは直らなかった（自分の検証の誤り）
+
+§21.2 と §21.12 の修正は、`get_llm` の kwargs から `temperature` を取り除く
+ものでした。**これでは直りません。**
+
+```python
+# biomni/llm.py:36-52
+if config is not None:
+    if temperature is None:
+        temperature = config.temperature      # ← 0.7 が入る
+if temperature is None:
+    temperature = 0.7                          # ← ここでも入る
+...
+return ChatAnthropic(model=model, temperature=temperature, ...)
+```
+
+biomni は **temperature を自分で埋め直します**。消しても `0.7` が入るだけで、
+`ChatAnthropic` には結局 temperature が渡り、400 は消えません。
+
+### 検証が間違っていた
+
+最悪なのは、この修正を「確認した」と報告していたことです。検証コードはこうでした。
+
+```python
+bl.get_llm = lambda *a, **k: captured.append(dict(k))   # ← 本物を潰している
+patch_biomni_get_llm(...)
+bl.get_llm(model="claude-opus-5", temperature=0.0)
+assert "temperature" not in captured[0]                  # ← 通る
+```
+
+**確かめるべき「既定値の埋め直し」を持っている関数そのものを、スタブに
+置き換えていました。** 「私が渡した dict に temperature が無い」ことしか
+確かめておらず、実際に何が `ChatAnthropic` に届くかは一度も見ていません。
+
+正しい検証は、**本物の `get_llm` を通して、出来上がったクライアントを調べる**ことです。
+
+```python
+llm = biomni_llm.get_llm(model="claude-opus-5", temperature=0.0)
+assert type(llm).__name__ == "ChatAnthropic"
+assert llm.temperature is None
+```
+
+これなら、消すだけの実装は落ちます（`temperature=0.0` が残る）。
+
+### 直したこと
+
+biomni に**作らせない**。source が Anthropic なら、こちらで組みます。
+
+```python
+if source == "Anthropic":
+    return build_chat_anthropic(settings, model=model, temperature=None, ...)
+return original(*args, **kwargs)
+```
+
+`build_chat_anthropic()` は §4.1 の時点から temperature を既定で送りません。
+既に正しいものが手元にあったので、それを使うだけです。
+
+model と source の決め方は biomni と同じ順（引数 → config → 既定 / モデル名からの
+推定）に揃えます。ずれると Anthropic なのに素通しして 400 に戻ります。
+
+### settings をクロージャに閉じ込めない
+
+パッチは 1 プロセス 1 回しか当たりません（`_hypo_patched` で二重適用を防ぐ）。
+`settings` を閉じ込めると、**最初のランの settings が居座り**、
+プロバイダやキーを変えた 2 回目以降のランで古いキーを使います。
+モジュール変数に置き、`patch_biomni_get_llm()` は呼ばれるたびに更新します。
+
+これはテストを書いていて見つかりました。
+「2 回目のテストが 1 回目の状態を引きずる」という形で表に出ています。

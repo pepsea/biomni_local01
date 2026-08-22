@@ -250,6 +250,11 @@ def build_agent(
     return bundle
 
 
+#: パッチが使う現在の settings。パッチ自体は 1 プロセス 1 回しか当たらないが、
+#: ランごとに設定は変わりうるので、こちらは毎回更新する
+_PATCH_SETTINGS: Settings | None = None
+
+
 def patch_biomni_get_llm(settings: Settings, policy: ResourcePolicy) -> bool:  # noqa: ARG001
     """biomni.llm.get_llm が Claude に temperature を送らないようにする。
 
@@ -276,25 +281,45 @@ def patch_biomni_get_llm(settings: Settings, policy: ResourcePolicy) -> bool:  #
         import biomni.llm as biomni_llm
     except Exception:  # noqa: BLE001 - biomni が無い環境では何もしない
         return False
+
+    # settings をクロージャに閉じ込めない。パッチは 1 プロセス 1 回しか当たらない
+    # ので、閉じ込めると **最初のランの settings が居座る**。プロバイダやキーを
+    # 変えた 2 回目以降のランで、古いキーを使う / キーが無いと誤判定する。
+    global _PATCH_SETTINGS
+    _PATCH_SETTINGS = settings
     if getattr(biomni_llm.get_llm, "_hypo_patched", False):
         return True
 
     original = biomni_llm.get_llm
 
     def get_llm(*args: Any, **kwargs: Any) -> Any:
-        model = str(kwargs.get("model") or (args[0] if args else "") or "")
-        source = kwargs.get("source") or ""
-        looks_anthropic = model.startswith("claude") or source == "Anthropic"
-        if looks_anthropic and kwargs.pop("temperature", None) is not None:
-            # ポリシーの prefix 一覧だけを見ない。あれは新しいモデルが出るたびに
-            # 古くなり、載っていないモデルで 400 に戻る。
-            #
-            # この経路（database.py の構造化抽出）は temperature=0.0 を決め打ちで
-            # 渡してくるが、送らなければ既定値が使われるだけで済む。
-            # 「決定性が少し落ちる」と「ツールが 400 で全滅する」を比べれば、
-            # 送らないほうが明らかに軽い。
-            log.debug("%s には temperature を送りません（400 を避けるため）", model)
-        return original(*args, **kwargs)
+        model, source = _resolve_model_and_source(args, kwargs)
+        if source != "Anthropic":
+            return original(*args, **kwargs)
+
+        # temperature を kwargs から消すだけでは直らない。biomni の get_llm は
+        #
+        #     if temperature is None: temperature = config.temperature   # 0.7
+        #     if temperature is None: temperature = 0.7
+        #
+        # と**自分で埋め直して** ChatAnthropic に渡す（biomni/llm.py:38,52）。
+        # 消しても 0.7 が入るだけで、400 は消えない。
+        #
+        # なので biomni に作らせない。Anthropic のときは自前で組む。
+        # build_chat_anthropic() は temperature を既定で送らない（§4.1）。
+        from biomni_hypo.llm import build_chat_anthropic
+
+        current = _PATCH_SETTINGS or settings
+        stop = kwargs.get("stop_sequences")
+        if not stop and len(args) >= 3:
+            stop = args[2]
+        try:
+            return build_chat_anthropic(
+                current, model=model, stop=stop, temperature=None, streaming=False
+            )
+        except Exception as exc:  # noqa: BLE001 - 作れなければ biomni に任せる
+            log.warning("Anthropic クライアントを自前で作れませんでした: %s", exc)
+            return original(*args, **kwargs)
 
     get_llm._hypo_patched = True  # type: ignore[attr-defined]
     biomni_llm.get_llm = get_llm
@@ -315,6 +340,32 @@ def patch_biomni_get_llm(settings: Settings, policy: ResourcePolicy) -> bool:  #
             patched += 1
     log.debug("get_llm を差し替えたモジュール: %d 件", patched)
     return True
+
+
+def _resolve_model_and_source(args: tuple[Any, ...], kwargs: dict[str, Any]) -> tuple[str, str]:
+    """biomni の get_llm と同じ順で model と source を決める。
+
+    biomni/llm.py の先頭と同じ規則:
+      1. 引数
+      2. config（BiomniConfig）
+      3. 既定値 / モデル名からの推定
+    ここがずれると、Anthropic なのに素通しして 400 に戻る。
+    """
+    model = kwargs.get("model") or (args[0] if args else None)
+    source = kwargs.get("source") or (args[3] if len(args) >= 4 else None)
+    config = kwargs.get("config") or (args[6] if len(args) >= 7 else None)
+
+    if config is not None:
+        if model is None:
+            model = getattr(config, "llm_model", None) or getattr(config, "llm", None)
+        if source is None:
+            source = getattr(config, "source", None)
+    if model is None:
+        model = "claude-3-5-sonnet-20241022"      # biomni の既定
+    if not source:
+        # biomni はモデル名から推定する。claude で始まれば Anthropic
+        source = "Anthropic" if str(model).startswith("claude") else ""
+    return str(model), str(source)
 
 
 def _restrict_modules(agent: Any, tool_modules: tuple[str, ...] | None) -> list[str]:
