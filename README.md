@@ -33,23 +33,39 @@ A1 の構築・ReAct ループ・ポリシーガード・パイプライン全�
 
 ## クイックスタート
 
-### まず動かす（いちばん単純）
+### まず動かす
 
 ```bash
-bash scripts/setup_local.sh     # 初回だけ
+bash scripts/setup_local.sh          # 初回だけ
+bash scripts/set-provider.sh ollama  # ホストの Ollama を探して設定を合わせる
 bash scripts/start.sh
 ```
 
-**Ollama をホストで動かしているなら、これが一番確実です。** アプリも同じホストで
+**Ollama はホストで動いているものをそのまま使います。** アプリも同じホストで
 動くので `localhost:11434` にそのまま届き、Docker 特有の問題
 （`host.docker.internal`、コンテナの取り違え、古いイメージ）が起きません。
 
-Docker が要るのは「常駐させたい」場合だけです。
+### 常駐させる（Docker 不要）
+
+```bash
+make local-install      # macOS: launchd / Linux: systemd --user
+```
+
+ログイン中のユーザーとして動きます。root は要りません。
+
+| コマンド | 用途 |
+| --- | --- |
+| `make local-install` | 常駐させる（設置 + 起動 + 疎通確認まで） |
+| `make local-uninstall` | 取り外す（`data` / `workspace` / `logs` は残る） |
+| `tail -f logs/app.log` | ログ |
+
+更新は `git pull` してからサービスを再起動するだけです
+（コマンドは `make local-install` の最後に表示されます）。
 
 > 別の Linux マシンに入れる場合は [docs/INSTALL-linux.md](docs/INSTALL-linux.md) に
 > まっさらな状態からの手順（Docker 導入・GPU・公開範囲・つまずいたとき）をまとめてあります。
 
-### Linux に常設する（Docker + systemd）
+### Docker で常設する（使わないなら読み飛ばして構いません）
 
 ```bash
 make service-install

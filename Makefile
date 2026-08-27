@@ -1,6 +1,6 @@
 .PHONY: help install install-min test lint notebook up api check-env doctor ollama-check app-check model-check models fetch check \
 	docker-up docker-down docker-logs docker-ps docker-rebuild docker-check docker-stop-ollama \
-	service-install service-status service-logs service-update service-uninstall
+	local-install local-uninstall service-install service-status service-logs service-update service-uninstall
 
 help:
 	@echo "install      依存を全部入れる（biomni 含む・重い）"
@@ -28,7 +28,11 @@ help:
 	@echo "docker-check   起動前チェックだけ（ポート衝突など）"
 	@echo "docker-stop-ollama  残った ollama コンテナを消す（ホストの Ollama を使う構成用）"
 	@echo ""
-	@echo "-- Linux に常設（systemd）--"
+	@echo "-- 常駐させる（Docker 無し・推奨）--"
+	@echo "local-install    常駐させる（macOS: launchd / Linux: systemd --user）"
+	@echo "local-uninstall  取り外す（データは残る）"
+	@echo ""
+	@echo "-- Docker で常設（使わないなら無視してよい）--"
 	@echo "service-install   常設する（Docker + systemd）"
 	@echo "service-status    状態"
 	@echo "service-logs      ログ"
@@ -119,6 +123,12 @@ docker-rebuild:
 
 # ---- Linux に常設（systemd + Docker）----------------------------------------
 # systemd が「起動と停止の入口」、コンテナの restart: unless-stopped が自己回復。
+
+local-install:
+	bash scripts/install-local-service.sh
+
+local-uninstall:
+	bash scripts/uninstall-local-service.sh
 
 service-install:
 	bash scripts/install-service.sh
