@@ -497,3 +497,66 @@ def test_the_patch_picks_up_new_settings(policy, monkeypatch):
     llm = biomni_llm.get_llm(model="claude-opus-5", temperature=0.0)
     assert llm.anthropic_api_key.get_secret_value() == "sk-ant-two", "古い settings が居座っている"
     assert llm.temperature is None
+
+
+def test_db_tools_can_use_a_stronger_model(policy, monkeypatch):
+    """DB ツールの URL 生成だけ別モデルに寄せられること。
+
+    実測: スキーマに cc_function と書いてあるのに、ローカルモデルが
+    function と書いて UniProt に 400 で弾かれた（docs/design/24）。
+    エージェント本体はローカルのまま、この 1 か所だけ強いモデルにする。
+    """
+    pytest.importorskip("langchain_anthropic")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+
+    import biomni.llm as biomni_llm
+
+    from biomni_hypo.agent_factory import patch_biomni_get_llm
+
+    settings = Settings()
+    settings.model = "qwen3:14b"
+    settings.provider = "ollama"
+    settings.anthropic_api_key = "sk-ant-test"
+    settings.tool_query_model = "claude-sonnet-5"
+    patch_biomni_get_llm(settings, policy)
+
+    llm = biomni_llm.get_llm(model="qwen3:14b", temperature=0.0)
+    assert type(llm).__name__ == "ChatAnthropic"
+    assert llm.model == "claude-sonnet-5"
+    assert llm.temperature is None
+
+
+def test_db_tools_stay_local_by_default(policy):
+    """設定しなければ、エージェントと同じモデルのまま（勝手に外へ出さない）。"""
+    import biomni.llm as biomni_llm
+
+    from biomni_hypo.agent_factory import patch_biomni_get_llm
+
+    settings = Settings()
+    settings.model = "qwen3:14b"
+    settings.provider = "ollama"
+    patch_biomni_get_llm(settings, policy)
+
+    llm = biomni_llm.get_llm(model="qwen3:14b", temperature=0.0)
+    assert type(llm).__name__ == "ChatOllama"
+
+
+def test_offline_mode_overrides_the_tool_query_model(policy, monkeypatch):
+    """オフラインの約束が最優先。設定されていても外へ出さない。"""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+
+    import biomni.llm as biomni_llm
+
+    from biomni_hypo.agent_factory import patch_biomni_get_llm
+
+    settings = Settings()
+    settings.model = "qwen3:14b"
+    settings.provider = "ollama"
+    settings.anthropic_api_key = "sk-ant-test"
+    settings.tool_query_model = "claude-sonnet-5"
+    settings.offline_mode = True
+    assert settings.tool_query_model_name == "qwen3:14b"
+
+    patch_biomni_get_llm(settings, policy)
+    llm = biomni_llm.get_llm(model="qwen3:14b", temperature=0.0)
+    assert type(llm).__name__ == "ChatOllama"

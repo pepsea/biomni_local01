@@ -235,6 +235,14 @@ class Settings(BaseModel):
     provider: str = Field(default_factory=lambda: _env("HYPO_PROVIDER", "ollama"))
     model: str = Field(default_factory=lambda: _env("HYPO_MODEL", "qwen3:14b"))
     extractor_model: str = Field(default_factory=lambda: _env("HYPO_EXTRACTOR_MODEL", ""))
+    #: biomni の DB ツール（query_uniprot / query_opentarget など）が
+    #: 「自然文 → API の URL」を作るときだけ使うモデル。空ならエージェントと同じ。
+    #:
+    #: ここはスキーマ厳守が要る。実測では、スキーマに cc_function と書いてあるのに
+    #: ローカルモデルが function と書いて UniProt に 400 で弾かれた（docs/design/24）。
+    #: エージェント本体はローカルのまま、この 1 か所だけ強いモデルに寄せられる。
+    #: **質問由来の語（遺伝子名など）が外部に出る**ので、明示的に設定したときだけ使う。
+    tool_query_model: str = Field(default_factory=lambda: _env("HYPO_TOOL_QUERY_MODEL", ""))
     ollama_base_url: str = Field(
         default_factory=lambda: _env("OLLAMA_BASE_URL", "http://localhost:11434")
     )
@@ -283,6 +291,17 @@ class Settings(BaseModel):
 
     def extractor_model_name(self) -> str:
         return self.extractor_model or self.model
+
+    @property
+    def tool_query_model_name(self) -> str:
+        """DB ツールの URL 生成に使うモデル。
+
+        オフラインモードでは絶対に外へ出さない（質問文が外部に出ない、という
+        約束が最優先）。設定されていてもエージェントと同じものを使う。
+        """
+        if self.offline_mode:
+            return self.model
+        return self.tool_query_model or self.model
 
     def to_run_config(self, policy_version: int = 0, biomni_version: str = "") -> RunConfig:
         return RunConfig(

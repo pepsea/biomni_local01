@@ -294,7 +294,20 @@ def patch_biomni_get_llm(settings: Settings, policy: ResourcePolicy) -> bool:  #
 
     def get_llm(*args: Any, **kwargs: Any) -> Any:
         model, source = _resolve_model_and_source(args, kwargs)
+        current = _PATCH_SETTINGS or settings
+
+        # DB ツール（query_uniprot など）の「自然文 → API の URL」だけ、
+        # 別のモデルに寄せられるようにする。ここはスキーマ厳守が要る一方、
+        # エージェント本体はローカルのままでよい（docs/design/24）。
+        wanted = current.tool_query_model_name
+        if wanted and wanted != model:
+            log.debug("DB ツールの URL 生成に %s を使います（本体は %s）", wanted, model)
+            model = wanted
+            source = "Anthropic" if model.startswith("claude") else source
+
         if source != "Anthropic":
+            if wanted and wanted != _resolve_model_and_source(args, kwargs)[0]:
+                kwargs = {**kwargs, "model": model}
             return original(*args, **kwargs)
 
         # temperature を kwargs から消すだけでは直らない。biomni の get_llm は
@@ -309,7 +322,6 @@ def patch_biomni_get_llm(settings: Settings, policy: ResourcePolicy) -> bool:  #
         # build_chat_anthropic() は temperature を既定で送らない（§4.1）。
         from biomni_hypo.llm import build_chat_anthropic
 
-        current = _PATCH_SETTINGS or settings
         stop = kwargs.get("stop_sequences")
         if not stop and len(args) >= 3:
             stop = args[2]
