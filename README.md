@@ -16,7 +16,7 @@
 | コアパッケージ (`biomni_hypo/`) | ✅ 実装済み |
 | 検証ノートブック (`notebooks/`) | ✅ 5 本 |
 | API + SSE (`backend/`) | ✅ 実装済み・実サーバで動作確認 |
-| テスト | ✅ **377 件**（うち 16 件は実物の biomni に対する統合テスト） |
+| テスト | ✅ **379 件**（うち 16 件は実物の biomni に対する統合テスト） |
 | モデル選択 | ✅ ローカルの Ollama を読み込んで選択（ライセンス判定つき） |
 | 質問入力 | ✅ 構造化入力・テンプレート・入力検査・プロンプト確認 |
 | Web UI | ✅ 依存なしの静的ページ。`/` に**解析の設計**・回答・**論点**・根拠・情報源・トレース、`/history` に条件つき検索 |
@@ -33,10 +33,23 @@ A1 の構築・ReAct ループ・ポリシーガード・パイプライン全�
 
 ## クイックスタート
 
-> **別の Linux マシンに入れる場合は [docs/INSTALL-linux.md](docs/INSTALL-linux.md)** に
+### まず動かす（いちばん単純）
+
+```bash
+bash scripts/setup_local.sh     # 初回だけ
+bash scripts/start.sh
+```
+
+**Ollama をホストで動かしているなら、これが一番確実です。** アプリも同じホストで
+動くので `localhost:11434` にそのまま届き、Docker 特有の問題
+（`host.docker.internal`、コンテナの取り違え、古いイメージ）が起きません。
+
+Docker が要るのは「常駐させたい」場合だけです。
+
+> 別の Linux マシンに入れる場合は [docs/INSTALL-linux.md](docs/INSTALL-linux.md) に
 > まっさらな状態からの手順（Docker 導入・GPU・公開範囲・つまずいたとき）をまとめてあります。
 
-### Linux に常設する（推奨）
+### Linux に常設する（Docker + systemd）
 
 ```bash
 make service-install
@@ -54,6 +67,10 @@ Docker + systemd で常設します。マシンを再起動しても自動で復
 
 ポートを変えるには `.env` に `APP_PORT=9000` と書いて `make docker-rebuild`。
 外部に出したくないなら `APP_BIND=127.0.0.1` も足します。
+
+> `.env` は git 管理外なので `git pull` では更新されません。設定の食い違いは
+> `bash scripts/set-provider.sh ollama`（または `both`）で揃えてください。
+> 起動前チェックが古い値を指摘します。
 
 ### Ollama と Claude を両方使えるようにする（推奨）
 
@@ -365,7 +382,7 @@ backend/app/     FastAPI + SSE + ラン実行ワーカー（子プロセス）+ 
   store.py       ラン保存と検索（条件も列に射影する）
 config/          resource_policy.yaml（商用限定・既定拒否）
 scripts/         起動・切り分け（doctor / ollama-check / app-check / model-check）・モデル一覧
-tests/           377 件。うち 361 件は外部サービス不要
+tests/           379 件。うち 363 件は外部サービス不要
 docs/design/     設計書
 ```
 

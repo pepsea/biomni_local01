@@ -92,3 +92,43 @@ def test_help_does_not_crash() -> None:
             ["bash", str(script), "--help"], capture_output=True, text=True, timeout=30
         )
         assert proc.returncode == 0, f"{script.name} --help: {proc.stderr}"
+
+
+# ------------------------------------------------- docker-preflight の早期失敗
+# 実測: Docker Desktop が止まっているのに、ポートの確認まで済ませてから
+#   unable to get image ...: Cannot connect to the Docker daemon
+# で落ちていた。先に確認して、Docker 無しで動かす道も示す。
+
+
+def _run_preflight(env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
+    import os
+
+    root = Path(__file__).resolve().parents[1]
+    return subprocess.run(  # noqa: S603
+        ["bash", str(root / "scripts/docker-preflight.sh")],
+        capture_output=True, text=True, timeout=120,
+        cwd=root, env={**os.environ, **(env or {})},
+    )
+
+
+def test_preflight_fails_fast_without_a_docker_daemon(tmp_path):
+    """docker が使えないなら、その場で止めて理由を出すこと。"""
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    (fake / "docker").write_text("#!/usr/bin/env bash\nexit 1\n")
+    (fake / "docker").chmod(0o755)
+
+    proc = _run_preflight({"PATH": f"{fake}:/usr/bin:/bin"})
+    assert proc.returncode == 1
+    assert "Docker デーモンに接続できません" in proc.stdout
+    assert "scripts/start.sh" in proc.stdout, "Docker 無しで動かす道を示すこと"
+    # ポートの確認まで進まないこと（進んでも意味が無い）
+    assert "APP_PORT" not in proc.stdout
+
+
+def test_preflight_flags_a_stale_compose_profile(tmp_path):
+    """COMPOSE_PROFILES=ollama は .env に残りやすい（.env は git 管理外）。"""
+    root = Path(__file__).resolve().parents[1]
+    text = (root / "scripts/docker-preflight.sh").read_text(encoding="utf-8")
+    assert "この profile はもうありません" in text
+    assert "set-provider.sh ollama" in text

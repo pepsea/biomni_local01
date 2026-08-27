@@ -514,3 +514,58 @@ model と source の決め方は biomni と同じ順（引数 → config → 既
 
 これはテストを書いていて見つかりました。
 「2 回目のテストが 1 回目の状態を引きずる」という形で表に出ています。
+
+
+## 21.19 Docker が動いていないことを最後に知らせていた
+
+```
+== 起動前チェック
+  ✓ APP_PORT=8003 は使えます
+  ✓ OLLAMA_PORT=11435 は使えます
+
+docker compose up -d --build app
+unable to get image 'biomni_local01-app': Cannot connect to the Docker daemon
+```
+
+**確認を全部済ませてから、Docker が動いていないと分かる。** しかも
+`✓` が並んだあとに生のエラーが出るので、何が悪いのか読み取りにくい。
+
+デーモンが落ちていれば、その先の確認（コンテナからの到達性、残存コンテナ）は
+**すべて意味がありません**。最初に見て、その場で止めます。
+
+```
+✗ Docker デーモンに接続できません。Docker が起動していません
+      macOS  : Docker Desktop を起動してください（メニューバーのクジラ）
+               open -a Docker    # そのあと 30 秒ほど待つ
+      Linux  : sudo systemctl start docker
+
+  Docker を使わずに動かせます（Ollama はホストにあるので、そのほうが単純です）:
+      bash scripts/start.sh
+```
+
+### `.env` は git 管理外なので、古い値が残り続ける
+
+同じ出力に `COMPOSE_PROFILES=ollama` が残っていました。§21.16 で
+ollama サービスを削除したので、この profile はもう存在しません。
+**`.env` は `.gitignore` にあるので、`git pull` しても更新されません。**
+
+preflight が古い値を指摘するようにしました。
+
+```
+! COMPOSE_PROFILES=ollama が .env に残っています（この profile はもうありません）
+✗ OLLAMA_BASE_URL がホストを指していません: http://localhost:11434
+    直す:  bash scripts/set-provider.sh ollama
+```
+
+設定を「pull で配る」ことはできないので、**ずれていることを起動時に言う**しかありません。
+
+### Docker を既定にしない
+
+一連のやり取りで、問題の大半が Docker 由来でした。
+ポート衝突（§17）、コンテナから届かない（§21.3）、空のコンテナを掴む（§21.15）、
+古いイメージ、そして今回のデーモン停止。
+
+Ollama をホストで動かしているなら、**アプリも同じホストで動かすほうが単純**です。
+`localhost:11434` にそのまま届き、上のどれも起きません。
+README のクイックスタートを `bash scripts/start.sh` から始めるようにしました。
+Docker が要るのは「常駐させたい」場合だけです。

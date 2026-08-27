@@ -96,6 +96,27 @@ MSG
 }
 
 printf '\n\033[1m== 起動前チェック\033[0m\n'
+
+# 何より先に Docker が動いているか。動いていなければ、この先の確認は
+# すべて無意味（compose も docker exec も使えない）
+if ! command -v docker >/dev/null 2>&1; then
+  ng "docker が見つかりません → https://docs.docker.com/get-docker/"
+  echo
+  echo "  Docker を使わずに動かせます（Ollama はホストにあるので、そのほうが単純です）:"
+  echo "      bash scripts/start.sh"
+  exit 1
+fi
+if ! docker info >/dev/null 2>&1; then
+  ng "Docker デーモンに接続できません。Docker が起動していません"
+  echo "      macOS  : Docker Desktop を起動してください（メニューバーのクジラ）"
+  echo "               open -a Docker    # そのあと 30 秒ほど待つ"
+  echo "      Linux  : sudo systemctl start docker"
+  echo
+  echo "  Docker を使わずに動かせます（Ollama はホストにあるので、そのほうが単純です）:"
+  echo "      bash scripts/start.sh"
+  exit 1
+fi
+
 printf '  provider=%s / COMPOSE_PROFILES=%s / APP_PORT=%s\n' \
        "$PROVIDER" "${PROFILES:-（空）}" "$APP_PORT"
 printf '  OLLAMA_BASE_URL=%s\n' "${OLLAMA_URL:-（未設定）}"
@@ -111,28 +132,17 @@ else
   ok "APP_PORT=$APP_PORT は使えます"
 fi
 
-# --- Ollama のポート（ollama プロファイルが有効なときだけ関係する）---
+# --- ollama コンテナ（もう compose には無い）---
+# COMPOSE_PROFILES=ollama が .env に残っていることがある。.env は git 管理外
+# なので、pull しても古い値が残り続ける。profile 名だけ残っていても実体が
+# 無いので害は無いが、紛らわしいので指摘する
 if [[ ",$PROFILES," == *",ollama,"* ]]; then
-  if in_use "$OLLAMA_PORT" && ! ours ollama; then
-    ng "OLLAMA_PORT=$OLLAMA_PORT は既に使われています： $(who_has "$OLLAMA_PORT")"
-    cat <<MSG
-      ホストに直接入れた Ollama が動いている可能性があります。3 つのどれかを選んでください。
+  warn "COMPOSE_PROFILES=ollama が .env に残っています（この profile はもうありません）"
+  echo "      Ollama はホストのものだけを使う構成です（docs/design/21 §21.16）。"
+  echo "      揃える:  bash scripts/set-provider.sh ollama"
+fi
 
-      (A) ホストの Ollama をそのまま使う（コンテナは立てない・おすすめ）
-            bash scripts/set-provider.sh ollama
-
-      (B) ホストの Ollama を止めて、コンテナ版を使う
-            sudo systemctl stop ollama     # または起動中のプロセスを終了
-            make docker-up
-
-      (C) コンテナ版を別ポートで動かす
-            echo "OLLAMA_PORT=11435" >> .env && make docker-up
-MSG
-    FAIL=1
-  else
-    ok "OLLAMA_PORT=$OLLAMA_PORT は使えます"
-  fi
-else
+if true; then
   ok "ollama コンテナは起動しません（ホストの Ollama を使う構成）"
 
   # profiles を外しても、既に動いているコンテナは compose が止めない。
