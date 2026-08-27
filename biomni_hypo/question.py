@@ -368,6 +368,10 @@ Rules:
 - Prefer querying public databases and the local data lake over recalling facts from memory.
 - When you cite a paper or a database record, make sure the identifier appears in the output of code you ran.
 - Report contradicting evidence as well; do not only collect support.
+- Consult SEVERAL INDEPENDENT sources before concluding. One database is not enough:
+  a hypothesis supported by only one query is weak, however clean that query looked.
+- Do not stop at the first plausible answer. Check whether it also holds in a
+  second, different kind of data.
 """.strip()
     + "\n\n"
     + _FORMAT_REMINDER
@@ -380,6 +384,10 @@ _JA_RULES = (
 - 記憶から答えず、公共データベースとローカルのデータレイクを実際に引くこと。
 - 文献や DB レコードを引くときは、その識別子が実行結果に現れていること。
 - 支持する根拠だけでなく、反証する根拠も報告すること。
+- 結論を出す前に、独立した情報源を複数当たること。1 つの DB では足りない。
+  1 回のクエリしか支えが無い仮説は、そのクエリがどれだけ綺麗でも弱い。
+- 最初にもっともらしい答えが出ても、そこで止めないこと。
+  種類の違うデータでも成り立つかを確かめること。
 """.strip()
     + "\n\n"
     + _FORMAT_REMINDER

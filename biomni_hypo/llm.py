@@ -248,6 +248,16 @@ def _human_message(text: str) -> Any:
     return HumanMessage(content=text)
 
 
+#: 探索が浅いうちに結論へ飛ぼうとするモデルへの押し戻し。
+#: 「まだ N 件しか引いていない」と具体的な数を見せるのが要点。
+#: 抽象的に「よく調べよ」と言っても効かない。
+SHALLOW_NUDGE = (
+    "[depth] You have run only {done} of at least {need} data queries. "
+    "Do not write <solution> yet. Query another INDEPENDENT source "
+    "(a different database or a different aspect) with <execute>."
+)
+
+
 class FormatReminderLLM:
     """invoke のたびに、会話の最後尾へ出力形式の念押しを差し込む薄い包み。
 
@@ -261,9 +271,13 @@ class FormatReminderLLM:
     `.with_structured_output()` も使う）。
     """
 
-    def __init__(self, inner: Any, reminder: str = TURN_REMINDER) -> None:
+    def __init__(
+        self, inner: Any, reminder: str = TURN_REMINDER, min_steps: int = 0
+    ) -> None:
         self._inner = inner
         self._reminder = reminder
+        #: これだけ <execute> を回すまでは、結論を書かないよう押し戻す
+        self._min_steps = max(0, min_steps)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
@@ -274,6 +288,21 @@ class FormatReminderLLM:
     async def ainvoke(self, messages: Any, *args: Any, **kwargs: Any) -> Any:
         return await self._inner.ainvoke(self._with_reminder(messages), *args, **kwargs)
 
+    def _text_to_append(self, messages: list[Any]) -> str:
+        """このターンで足す文。形式の念押し + 必要なら深さの押し戻し。"""
+        text = self._reminder
+        if self._min_steps:
+            done = sum(
+                1
+                for m in messages
+                if getattr(m, "type", "") == "ai"
+                and isinstance(getattr(m, "content", None), str)
+                and "<execute>" in m.content
+            )
+            if done < self._min_steps:
+                text += "\n" + SHALLOW_NUDGE.format(done=done, need=self._min_steps)
+        return text
+
     def _with_reminder(self, messages: Any) -> Any:
         if not isinstance(messages, list) or not messages:
             return messages
@@ -283,17 +312,18 @@ class FormatReminderLLM:
             return messages          # マルチモーダル等は触らない
         if self._reminder in content:
             return messages          # 二重に足さない
+        addition = self._text_to_append(messages)
 
         if getattr(last, "type", "") == "human":
             # observation は human として積まれる。そこに足すのが一番自然
-            clone = last.model_copy(update={"content": f"{content}\n\n{self._reminder}"})
+            clone = last.model_copy(update={"content": f"{content}\n\n{addition}"})
             return [*messages[:-1], clone]
 
         # 最後が assistant のことがある（biomni は自分の出力を積んだまま
         # generate に戻ることがある）。そこに足すと、モデルは**自分が書いた
         # 文章の続き**として読む。指示として効かないどころか、指示文ごと
         # 真似される。別の human メッセージとして積む。
-        return [*messages, _human_message(self._reminder)]
+        return [*messages, _human_message(addition)]
 
 
 def build_agent_llm(settings: Settings) -> tuple[Any, TokenStreamHandler]:
@@ -307,7 +337,7 @@ def build_agent_llm(settings: Settings) -> tuple[Any, TokenStreamHandler]:
     """
     handler = TokenStreamHandler()
     llm = build_llm(settings, stop=AGENT_STOP_SEQUENCES, callbacks=[handler])
-    return FormatReminderLLM(llm), handler
+    return FormatReminderLLM(llm, min_steps=settings.min_exploration_steps), handler
 
 
 def hallucinated_observation(raw_text: str) -> bool:

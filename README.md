@@ -12,11 +12,11 @@
 
 | レイヤ | 状態 |
 | --- | --- |
-| 設計 (`docs/design/`) | ✅ 01〜24 |
+| 設計 (`docs/design/`) | ✅ 01〜25 |
 | コアパッケージ (`biomni_hypo/`) | ✅ 実装済み |
 | 検証ノートブック (`notebooks/`) | ✅ 5 本 |
 | API + SSE (`backend/`) | ✅ 実装済み・実サーバで動作確認 |
-| テスト | ✅ **387 件**（うち 16 件は実物の biomni に対する統合テスト） |
+| テスト | ✅ **396 件**（うち 16 件は実物の biomni に対する統合テスト） |
 | モデル選択 | ✅ ローカルの Ollama を読み込んで選択（ライセンス判定つき） |
 | 質問入力 | ✅ 構造化入力・テンプレート・入力検査・プロンプト確認 |
 | Web UI | ✅ 依存なしの静的ページ。`/` に**解析の設計**・回答・**論点**・根拠・情報源・トレース、`/history` に条件つき検索 |
@@ -382,7 +382,7 @@ backend/app/     FastAPI + SSE + ラン実行ワーカー（子プロセス）+ 
   store.py       ラン保存と検索（条件も列に射影する）
 config/          resource_policy.yaml（商用限定・既定拒否）
 scripts/         起動・切り分け（doctor / ollama-check / app-check / model-check）・モデル一覧
-tests/           387 件。うち 371 件は外部サービス不要
+tests/           396 件。うち 380 件は外部サービス不要
 docs/design/     設計書
 ```
 
@@ -420,6 +420,7 @@ docs/design/     設計書
 | [22-context-budget](docs/design/22-context-budget.md) | **context が先に尽きる**（60 手回すつもりが 5 手で崩れる） |
 | [23-parse-error-cutoff](docs/design/23-parse-error-cutoff.md) | **biomni の打ち切りが発動しない**（28 回回り続けた） |
 | [24-local-model-limits](docs/design/24-local-model-limits.md) | **ローカルモデルが苦手な場所**（DB ツールの URL 生成）を切り分ける |
+| [25-exploration-depth](docs/design/25-exploration-depth.md) | **小さいモデルは早く満足する**（Claude 6 手 / qwen3 3 手） |
 
 ## 設計の要点
 

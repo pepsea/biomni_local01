@@ -134,3 +134,71 @@ def test_appending_to_a_human_message_does_not_add_a_turn(wrapped):
     llm.invoke(msgs)
     assert len(inner.seen) == 1
     assert inner.seen[-1].type == "human"
+
+
+# ------------------------------------------------------- 探索の深さの押し戻し
+# 小さいモデルは早く満足する。実測では Claude が 6 手かけるところを
+# qwen3:14b は 3 手で <solution> を書いた（docs/design/25）。
+
+
+def _with_executes(n: int) -> list:
+    msgs = [SystemMessage(content="SYS"), HumanMessage(content="Q")]
+    for i in range(n):
+        msgs.append(AIMessage(content=f"<execute>print({i})</execute>"))
+        msgs.append(HumanMessage(content="<observation>ok</observation>"))
+    return msgs
+
+
+@pytest.mark.parametrize("done", [0, 1, 2, 3])
+def test_shallow_runs_get_pushed_back(done):
+    inner = Recorder()
+    llm = FormatReminderLLM(inner, min_steps=4)
+    llm.invoke(_with_executes(done))
+    text = inner.seen[-1].content
+    assert "[depth]" in text
+    assert f"only {done} of at least 4" in text, "具体的な数を見せること"
+    assert "Do not write <solution> yet" in text
+
+
+def test_the_push_back_stops_at_the_threshold():
+    inner = Recorder()
+    llm = FormatReminderLLM(inner, min_steps=4)
+    llm.invoke(_with_executes(4))
+    assert "[depth]" not in inner.seen[-1].content, "十分掘ったら押し戻さない"
+
+
+def test_the_format_reminder_is_still_there():
+    """深さの押し戻しがあっても、形式の念押しは消えないこと。"""
+    inner = Recorder()
+    llm = FormatReminderLLM(inner, min_steps=4)
+    llm.invoke(_with_executes(0))
+    assert TURN_REMINDER in inner.seen[-1].content
+
+
+def test_zero_disables_the_push_back():
+    inner = Recorder()
+    llm = FormatReminderLLM(inner, min_steps=0)
+    llm.invoke(_with_executes(0))
+    assert "[depth]" not in inner.seen[-1].content
+
+
+def test_only_the_model_s_own_executes_are_counted():
+    """observation に <execute> の文字が出ても数えない（水増ししない）。"""
+    inner = Recorder()
+    llm = FormatReminderLLM(inner, min_steps=4)
+    msgs = [
+        SystemMessage(content="SYS"),
+        HumanMessage(content="<observation>使い方: <execute>...</execute></observation>"),
+    ]
+    llm.invoke(msgs)
+    assert "only 0 of at least 4" in inner.seen[-1].content
+
+
+def test_the_setting_reaches_the_wrapper():
+    from biomni_hypo.config import Settings
+    from biomni_hypo.llm import build_agent_llm
+
+    settings = Settings()
+    settings.min_exploration_steps = 7
+    llm, _handler = build_agent_llm(settings)
+    assert llm._min_steps == 7

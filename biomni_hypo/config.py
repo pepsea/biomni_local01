@@ -261,6 +261,15 @@ class Settings(BaseModel):
     )
     timeout_seconds: int = Field(default_factory=lambda: int(_env("BIOMNI_TIMEOUT_SECONDS", "600")))
     max_steps: int = Field(default_factory=lambda: int(_env("HYPO_MAX_STEPS", "60")))
+    #: 結論を書く前に、最低これだけはデータを引かせる。
+    #:
+    #: 小さいモデルは早く満足する。実測では Claude が 6 手かけるところを
+    #: qwen3:14b は 3 手で <solution> を書いた（docs/design/25）。
+    #: 手数そのものが目的ではなく、**独立した情報源をいくつ見たか**が
+    #: 根拠の厚みになる。0 なら無効。
+    min_exploration_steps: int = Field(
+        default_factory=lambda: int(_env("HYPO_MIN_EXPLORATION_STEPS", "4"))
+    )
     wallclock_limit_sec: int = Field(
         default_factory=lambda: int(_env("HYPO_WALLCLOCK_LIMIT_SEC", "1800"))
     )
