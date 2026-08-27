@@ -12,7 +12,11 @@ from biomni_hypo.fixtures import (
     fake_bundle,
 )
 from biomni_hypo.schemas import StepKind
-from biomni_hypo.tracing import TracingRunner, parse_plan
+from biomni_hypo.tracing import (
+    MAX_CONSECUTIVE_PARSE_ERRORS,
+    TracingRunner,
+    parse_plan,
+)
 
 
 def _run(messages, settings=None):
@@ -264,3 +268,82 @@ def test_a_run_without_a_plan_is_still_fine():
     result, _ = _run(TRACE_MESSAGES)
     assert not result.plan
     assert not [s for s in result.steps if s.kind == StepKind.PLAN]
+
+
+# ------------------------------------- 差し戻しの打ち切り（biomni の分は効かない）
+# biomni にも打ち切り（2 回）は書いてあるが、一度も発動しない:
+#   - 差し戻しは HumanMessage として積まれるのに、条件は AIMessage しか数えない
+#   - 文言は "But there are no tags"（小文字 t）だが、条件は
+#     "There are no tags"（大文字 T）を探している
+# 実測で 28 回まで回っていた（docs/design/23）。
+
+
+RETRY_TEXT = (
+    "Each response must include thinking process followed by either <execute> or "
+    "<solution> tag. But there are no tags in the current response. "
+    "Please follow the instruction, fix and regenerate the response again."
+)
+
+
+def test_biomni_s_own_cutoff_never_fires():
+    """止める側が誰もいないことを、biomni の条件そのままで示す。"""
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    messages = []
+    for _ in range(5):
+        messages.append(AIMessage(content="平文の計画だけ"))
+        messages.append(HumanMessage(content=RETRY_TEXT))
+
+    # a1.py の generate ノートと同じ式
+    error_count = sum(
+        1 for m in messages if isinstance(m, AIMessage) and "There are no tags" in m.content
+    )
+    assert error_count == 0, "biomni の条件は 1 件も数えられない"
+    assert error_count < 2, "したがって打ち切り条件 (>= 2) は成立しない"
+    assert "There are no tags" not in RETRY_TEXT, "大文字小文字も合っていない"
+
+
+def test_consecutive_parse_errors_stop_the_run():
+    messages = []
+    for _ in range(20):
+        messages += ["平文の計画だけ", RETRY_TEXT]
+    result, _ = _run(messages)
+
+    assert result.parsing_errors == MAX_CONSECUTIVE_PARSE_ERRORS, "連続 3 回で止めること"
+    assert "打ち切りました" in result.stopped_reason
+    assert len([s for s in result.steps if s.kind == StepKind.PARSING_ERROR]) == 3
+
+
+def test_recovering_resets_the_streak():
+    """1 回つまずいても持ち直せば、ランは続くこと（§16）。"""
+    result, _ = _run([
+        "平文", RETRY_TEXT,
+        "GWAS を見ます。\n<execute>\nprint(1)\n</execute>",
+        "<observation>1</observation>",
+        "平文", RETRY_TEXT,
+        "<solution>結論</solution>",
+    ])
+    assert result.solution_text == "結論"
+    assert result.parsing_errors == 2, "通算は数える"
+    assert not result.stopped_reason, "持ち直したので打ち切らない"
+
+
+def test_the_total_count_is_not_reset():
+    """連続はリセットしても、何回つまずいたかは残す。"""
+    result, runner = _run([
+        "平文", RETRY_TEXT,
+        "<execute>\nprint(1)\n</execute>", "<observation>1</observation>",
+        "平文", RETRY_TEXT,
+        "<execute>\nprint(2)\n</execute>", "<observation>2</observation>",
+        "<solution>結論</solution>",
+    ])
+    assert result.parsing_errors == 2
+    assert runner.consecutive_parse_errors == 0
+
+
+def test_the_hint_does_not_claim_biomni_stops():
+    """効かない打ち切りを『効く』と書かない。"""
+    from biomni_hypo.tracing import PARSE_ERROR_HINT
+
+    assert "2 回まで差し戻し" not in PARSE_ERROR_HINT
+    assert "num_ctx" in PARSE_ERROR_HINT

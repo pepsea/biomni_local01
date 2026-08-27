@@ -54,12 +54,23 @@ _NOTE_RE = re.compile(r"[（(]\s*(?:failed|skipped|完了|失敗)?[^)）]*[)）]
 PARSE_RETRY_MARK = "there are no tags in the current response"
 PARSE_GIVEUP_MARK = "execution terminated due to repeated parsing errors"
 
+#: 連続で何回タグ無しが続いたら、こちらでランを打ち切るか。
+#:
+#: biomni にも打ち切り（2 回）が書いてあるが、**一度も発動しない**:
+#:   - 差し戻しは HumanMessage として積まれるのに、条件は AIMessage しか数えない
+#:   - 文言は "But there are no tags"（小文字 t）だが、条件は
+#:     "There are no tags"（大文字 T）を探している
+#: 実測で 28 回まで回っていた。止める側が誰もいない（docs/design/23）。
+#:
+#: 1〜2 回は持ち直すことがあるので（§16）、**連続** 3 回で打ち切る。
+MAX_CONSECUTIVE_PARSE_ERRORS = 3
+
 #: 差し戻しが起きたときに UI・ログへ出す原因と対処
 PARSE_ERROR_HINT = (
     "モデルが <execute> / <solution> のどちらも出力しませんでした。"
-    "biomni は 2 回まで差し戻し、それでも直らなければランを打ち切ります。"
-    "よくある原因: (1) num_ctx が小さくシステムプロンプトが切り詰められている"
-    "（docs/design/04 §4.5）、(2) num_predict が小さく <think> の途中で生成が尽きる、"
+    "よくある原因: (1) context が尽きてタグの規定が落ちている"
+    "（docs/design/22。実行設定の num_ctx と「約 N 手で埋まります」の警告を確認）、"
+    "(2) num_predict が小さく <think> の途中で生成が尽きる、"
     "(3) 指示追従性の低いモデル。より大きな num_ctx / num_predict か、"
     "別のモデル（qwen3:14b 以上、または Claude）を試してください。"
 )
@@ -111,6 +122,7 @@ class TracingRunner:
         self.stopped_reason = ""
         self.hallucinated_observations = 0
         self.parsing_errors = 0
+        self.consecutive_parse_errors = 0
         self.streamed_tokens = 0
 
     # ------------------------------------------------------------------ 実行
@@ -162,6 +174,10 @@ class TracingRunner:
                     last_ts = now
                 seen = len(messages)
 
+                if self.consecutive_parse_errors >= MAX_CONSECUTIVE_PARSE_ERRORS:
+                    # biomni の打ち切りは効かない（§23）ので、こちらで抜ける。
+                    # 放っておくと recursion_limit=500 まで同じ失敗を繰り返す
+                    break
                 if len(self.steps) >= settings.max_steps:
                     self.stopped_reason = f"max_steps({settings.max_steps}) に到達"
                     break
@@ -227,6 +243,10 @@ class TracingRunner:
         parse_step = self._classify_parse_error(text, idx, duration_ms)
         if parse_step is not None:
             return [parse_step]
+        if EXECUTE_RE.search(text) or SOLUTION_RE.search(text):
+            # タグ付きで返せた = 持ち直した。連続カウントは戻す。
+            # 通算（parsing_errors）は戻さない。何回つまずいたかは残す
+            self.consecutive_parse_errors = 0
 
         obs = OBSERVATION_RE.search(text)
         exe = EXECUTE_RE.search(text)
@@ -360,18 +380,29 @@ class TracingRunner:
             )
         if PARSE_RETRY_MARK in low:
             self.parsing_errors += 1
+            self.consecutive_parse_errors += 1
             log.warning(
-                "モデルがタグ無しで応答したため biomni が差し戻しました（%d 回目）。%s",
+                "モデルがタグ無しで応答したため biomni が差し戻しました"
+                "（通算 %d 回 / 連続 %d 回）。%s",
                 self.parsing_errors,
+                self.consecutive_parse_errors,
                 PARSE_ERROR_HINT,
             )
+            note = (
+                f"タグの無い応答を biomni が差し戻しました"
+                f"（通算 {self.parsing_errors} 回 / 連続 {self.consecutive_parse_errors} 回）。"
+            )
+            if self.consecutive_parse_errors >= MAX_CONSECUTIVE_PARSE_ERRORS:
+                # biomni の打ち切りは効かない。こちらで止める
+                self.stopped_reason = (
+                    f"タグの無い応答が {self.consecutive_parse_errors} 回続いたため打ち切りました。"
+                    + PARSE_ERROR_HINT
+                )
+                note = self.stopped_reason
             return Step(
                 idx=idx,
                 kind=StepKind.PARSING_ERROR,
-                text=(
-                    f"タグの無い応答を biomni が差し戻しました（{self.parsing_errors} 回目）。"
-                    + PARSE_ERROR_HINT
-                ),
+                text=note + ("" if note is self.stopped_reason else PARSE_ERROR_HINT),
                 error=text.strip(),
                 duration_ms=duration_ms,
             )
