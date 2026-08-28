@@ -8,3 +8,5 @@ node_modules/
 reports/
 *.sqlite3
 .ipynb_checkpoints/
+# 常駐サービス（scripts/install-local-service.sh）のログ出力先
+logs/
