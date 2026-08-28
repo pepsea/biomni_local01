@@ -48,12 +48,14 @@ import sys
 sys.path.insert(0, ".")
 try:
     from biomni_hypo.config import (
-        AGENT_DEPENDENCIES, API_DEPENDENCIES, install_hint, missing_dependencies,
+        AGENT_DEPENDENCIES, API_DEPENDENCIES, TOOL_DEPENDENCIES,
+        install_hint, missing_dependencies,
     )
 except Exception as exc:
     print("FATAL", exc); raise SystemExit(0)
 print("API_MISSING", install_hint(missing_dependencies(API_DEPENDENCIES)))
 print("AGENT_MISSING", install_hint(missing_dependencies(AGENT_DEPENDENCIES)))
+print("TOOL_MISSING", install_hint(missing_dependencies(TOOL_DEPENDENCIES)))
 PYCHECK
 )
 if grep -q '^FATAL' <<<"$DEPS"; then
@@ -72,6 +74,16 @@ if [[ -n "$AGENT_MISSING" ]]; then
   echo "      $AGENT_MISSING"
 else
   ok "エージェントの依存 OK"
+fi
+# ツールの依存は、無くても起動はできる。ただし該当ツールは自動で無効になり
+# （docs/design/20）、エージェントが引ける情報源が減る。黙って減らさない
+TOOL_MISSING=$(sed -n 's/^TOOL_MISSING //p' <<<"$DEPS")
+if [[ -n "$TOOL_MISSING" ]]; then
+  warn "ツールの依存が足りません。該当ツールは無効になります:"
+  echo "      $TOOL_MISSING"
+  echo "      まとめて入れる:  pip install -r requirements.txt"
+else
+  ok "ツールの依存 OK"
 fi
 
 say "LLM"

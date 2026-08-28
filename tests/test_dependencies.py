@@ -87,8 +87,19 @@ def test_lazy_imports_are_satisfied_in_this_environment():
     """
     import importlib
 
+    missing = []
     for module in ("pymed", "arxiv"):
-        importlib.import_module(module)
+        try:
+            importlib.import_module(module)
+        except ImportError:
+            missing.append(module)
+    assert not missing, (
+        f"{', '.join(missing)} が入っていません。requirements.txt に追加された依存です。\n"
+        "  直す:  pip install -r requirements.txt\n"
+        "         （仮想環境を使っているなら .venv/bin/pip install -r requirements.txt）\n"
+        "  入れないと query_pubmed / query_arxiv が呼ばれた瞬間に落ち、\n"
+        "  文献を引けないエージェントが自分の記憶で書き始めます（docs/design/20）。"
+    )
 
 
 def test_pubmed_and_arxiv_are_declared():
