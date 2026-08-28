@@ -1,9 +1,15 @@
 from unittest.mock import MagicMock
 
 import pytest
-from fastapi.testclient import TestClient
 
-import backend.app.main as main
+# 1 つの欠品でテスト全体が止まらないようにする。モジュール先頭で無条件に
+# import すると collection でエラーになり、**関係の無いテストまで実行されない**。
+# skip なら残りは走る。この非対称性のために、必ず importorskip を先に置く
+pytest.importorskip("fastapi", reason="fastapi が無い環境では API テストをスキップ")
+
+from fastapi.testclient import TestClient  # noqa: E402
+
+import backend.app.main as main  # noqa: E402
 
 LOCAL_MODELS = [
     ("qwen3:14b", 9_276_055_800, 40960),

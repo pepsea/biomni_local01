@@ -287,6 +287,7 @@ RETRY_TEXT = (
 
 def test_biomni_s_own_cutoff_never_fires():
     """止める側が誰もいないことを、biomni の条件そのままで示す。"""
+    pytest.importorskip("langchain_core", reason="最小構成では langchain を入れない")
     from langchain_core.messages import AIMessage, HumanMessage
 
     messages = []

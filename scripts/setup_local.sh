@@ -42,8 +42,11 @@ if [[ $FULL -eq 1 ]]; then
   ok "requirements.txt"
 else
   say "依存（最小構成）"
-  pip install --quiet pydantic pyyaml requests pytest
-  ok "pydantic / pyyaml / requests / pytest"
+  # 「最小構成でテストが通る」を実際に満たす集合。
+  # fastapi / httpx は tests/test_api.py が要る（API を持たずに API は試せない）。
+  # ここを削ると collection の時点で止まる（実測で踏んだ）
+  pip install --quiet pydantic pyyaml requests pytest fastapi "uvicorn[standard]" httpx
+  ok "pydantic / pyyaml / requests / pytest / fastapi / uvicorn / httpx"
   echo "  ※ biomni と Ollama を使うには --full を付けて再実行してください"
 fi
 

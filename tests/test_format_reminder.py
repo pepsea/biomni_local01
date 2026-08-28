@@ -8,9 +8,20 @@
 """
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from biomni_hypo.llm import TURN_REMINDER, FormatReminderLLM
+# langchain はエージェントを動かすときだけ要る。最小構成
+# （bash scripts/setup_local.sh）でも pytest が通るよう、
+# **モジュール先頭で必須依存にしない**。ここで import すると collection の
+# 時点で ModuleNotFoundError になり、テスト全体が止まる（実測で踏んだ）。
+pytest.importorskip("langchain_core", reason="langchain-core が無い環境ではスキップ")
+
+from langchain_core.messages import (  # noqa: E402
+    AIMessage,
+    HumanMessage,
+    SystemMessage,
+)
+
+from biomni_hypo.llm import TURN_REMINDER, FormatReminderLLM  # noqa: E402
 
 
 class Recorder:
