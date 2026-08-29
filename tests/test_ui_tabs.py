@@ -244,3 +244,19 @@ def test_an_empty_ollama_mentions_the_container_case(html):
     assert "コンテナで動いている" in html
     assert "docker exec -it" in html
     assert "make docker-down" not in html, "コンテナ版が本番の構成もある"
+
+
+def test_only_installed_ollama_models_are_listed(html):
+    """選択欄には、その Ollama に実際に入っているものだけを出す。
+
+    取得していないものまで並べると、選べない行が大半を占めて読めない。
+    取得できるものは選択欄ではなく、下の 1 行で知らせる。
+    """
+    body = html[html.index("const groups = {") :]
+    body = body[: body.index('$("model").onchange')]
+    assert "m.installed" in body, "未取得のものを絞っていない"
+    assert 'filter(m => !m.local || m.installed)' in body
+
+    assert 'id="pullable"' in html, "取得できるものの案内が無い"
+    assert "取得すれば使えるモデル" in html
+    assert "ollama pull" in html
