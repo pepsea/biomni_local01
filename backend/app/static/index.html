@@ -54,7 +54,8 @@
   button.ghost { background:transparent; color:var(--fg); border:1px solid var(--line);
                  padding:9px 13px; border-radius:6px; cursor:pointer; font:inherit; }
   button:disabled { opacity:.5; cursor:not-allowed; }
-  .msg { padding:7px 9px; border-radius:6px; font-size:12.5px; margin:7px 0; border:1px solid var(--line); }
+  .msg { padding:7px 9px; border-radius:6px; font-size:12.5px; margin:7px 0; border:1px solid var(--line);
+         white-space:pre-wrap; overflow-x:auto; }   /* traceback を折り返して見せる */
   .msg.error { color:var(--err); border-color:var(--err); }
   .msg.warning { color:var(--warn); border-color:var(--warn); }
   .msg.info { color:var(--muted); }
@@ -216,10 +217,19 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 let MODES = [], TEMPLATES = [], mode = "hypothesis", runId = null, es = null, RESULT = null, STEPS = [];
 
+function errorText(detail, statusText) {
+  // 500 の本文が空だと `Internal Server Error` の 7 文字しか出ない。
+  // サーバが理由と traceback を返すようにしたので、あるものは全部見せる。
+  if (typeof detail !== "object" || detail === null) return detail || statusText;
+  const parts = [detail.detail || JSON.stringify(detail)];
+  if (detail.where) parts.push(`（${detail.where}）`);
+  if (detail.traceback) parts.push("\n" + detail.traceback);
+  return parts.join(" ");
+}
 async function api(path, opts) {
   const r = await fetch(path, opts);
   const b = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(typeof b.detail === "object" ? (b.detail.detail || JSON.stringify(b.detail)) : (b.detail || r.statusText));
+  if (!r.ok) throw new Error(errorText(b.detail, r.statusText));
   return b;
 }
 function collect() {

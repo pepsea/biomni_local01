@@ -414,3 +414,44 @@ def test_the_worker_gets_a_question_it_can_rebuild(client_with_ollama, monkeypat
     assert q.organism == "ヒト"
     assert q.focus == ["STAT1"]
     assert "{" not in q.text
+
+
+# ------------------------------------------------------- 500 が理由を持つこと
+# 実測: 「調べる」を押すと画面に `Internal Server Error` の 7 文字だけが出た。
+# FastAPI の既定の 500 は本文が空なので、利用者にも開発者にも手掛かりが無い。
+
+
+def test_unexpected_failure_returns_the_reason(client, monkeypatch):
+    """未処理の例外は、型・メッセージ・場所・traceback を JSON で返すこと。"""
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("何かが壊れた")
+
+    monkeypatch.setattr(main, "_catalog", boom)
+    # ServerErrorMiddleware は応答を返したうえで例外を再送出する（サーバ側で
+    # ログに残せるように）。テストでは受け取る応答のほうを見たいので抑える。
+    strict = TestClient(main.app, raise_server_exceptions=False)
+    r = strict.post("/api/runs", json={"question": QUESTION, "model": "qwen3:14b"})
+
+    assert r.status_code == 500
+    detail = r.json()["detail"]
+    assert detail["error"] == "internal"
+    assert "RuntimeError: 何かが壊れた" in detail["detail"]
+    assert detail["where"] == "POST /api/runs"
+    assert "boom" in detail["traceback"], "traceback を返していない"
+
+
+def test_store_that_cannot_open_says_why(client, monkeypatch):
+    """DB を開けない場合は 503 と、その場で調べた理由を返すこと。"""
+    from backend.app.store import StoreUnavailable
+
+    def unavailable():
+        raise StoreUnavailable("データベースを開けません: /nowhere/runs.sqlite3\n  権限がありません")
+
+    monkeypatch.setattr(main, "store", unavailable)
+    r = client.get("/api/runs")
+
+    assert r.status_code == 503
+    detail = r.json()["detail"]
+    assert detail["error"] == "store_unavailable"
+    assert "データベースを開けません" in detail["detail"]

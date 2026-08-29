@@ -12,6 +12,7 @@ import json
 import logging
 import queue as queue_mod
 import subprocess
+import traceback
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -19,10 +20,10 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from backend.app.store import RunStore
+from backend.app.store import RunStore, StoreUnavailable
 from backend.app.worker import spawn, terminate_tree
 from biomni_hypo.config import (
     AGENT_DEPENDENCIES,
@@ -112,6 +113,36 @@ def store() -> RunStore:
     if _STORE is None:
         _STORE = RunStore(Path(SETTINGS.workspace_path) / "runs.sqlite3")
     return _STORE
+
+
+# --------------------------------------------------------------- 例外の見せ方
+# 素の 500 は本文が空で、画面には `Internal Server Error` の 7 文字しか出ない。
+# 手元で 1 人が使う道具なので、理由をそのまま返すほうが役に立つ（実測で踏んだ）。
+
+
+@app.exception_handler(StoreUnavailable)
+async def _store_unavailable(_: Request, exc: StoreUnavailable) -> JSONResponse:
+    log.error("ラン保存を開けません: %s", exc)
+    return JSONResponse(
+        status_code=503,
+        content={"detail": {"error": "store_unavailable", "detail": str(exc)}},
+    )
+
+
+@app.exception_handler(Exception)
+async def _unhandled(request: Request, exc: Exception) -> JSONResponse:
+    log.exception("未処理の例外: %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": {
+                "error": "internal",
+                "detail": f"{type(exc).__name__}: {exc}",
+                "where": f"{request.method} {request.url.path}",
+                "traceback": traceback.format_exc()[-2000:],
+            }
+        },
+    )
 
 #: モデル一覧のキャッシュ（/api/tags と /api/show を毎回叩かない）
 _model_catalog: Any = None

@@ -37,7 +37,8 @@
   button.ghost:hover { color:var(--fg); border-color:var(--muted); }
   .hintline { color:var(--muted); font-size:12px; margin:8px 0; }
   .msg { border:1px solid var(--line); border-left-width:3px; border-radius:6px;
-         padding:8px 11px; margin:8px 0; font-size:13px; }
+         padding:8px 11px; margin:8px 0; font-size:13px;
+         white-space:pre-wrap; overflow-x:auto; }   /* 診断の改行を潰さない */
   .msg.error { color:var(--err); border-color:var(--err); }
   .empty { color:var(--muted); }
   .hitem { border:1px solid var(--line); border-radius:9px; padding:12px 15px; margin-bottom:11px;
@@ -86,7 +87,8 @@ async function api(path, opts) {
   const r = await fetch(path, opts);
   const b = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(typeof b.detail === "object"
-    ? (b.detail.detail || JSON.stringify(b.detail)) : (b.detail || r.statusText));
+    ? [b.detail.detail || JSON.stringify(b.detail), b.detail.traceback].filter(Boolean).join("\n")
+    : (b.detail || r.statusText));
   return b;
 }
 
