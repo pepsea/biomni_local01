@@ -317,3 +317,36 @@ def test_an_import_of_a_loaded_tool_is_told_to_stop_importing():
         assert "result = query_pubmed(...)" in hint
     finally:
         llm_module.PRELOADED_TOOLS.discard("query_pubmed")
+
+
+# ------------------------------------------------- 外部 API のエラーへの助言
+# 実測: query_uniprot が fields=function で 400 を返した。UniProt の返却
+# フィールド名は UI の見出しと違い、モデルは UI の言葉で書く。
+
+
+def test_invalid_uniprot_fields_get_a_concrete_fix():
+    from biomni_hypo.llm import _api_error_hint
+
+    err = (
+        "{'success': False, 'response_url_error': '{\"messages\":["
+        "\"Invalid fields parameter value \\'function\\'\","
+        "\"Invalid fields parameter value \\'sequences\\'\"]}'}"
+    )
+    hint = _api_error_hint(err)
+    assert "function" in hint and "sequences" in hint
+    assert "DROP the `fields=` parameter" in hint, "一番確実な直し方を出す"
+    assert "+AND+" in hint, "クエリの連結も間違えている"
+
+
+def test_a_failed_tool_call_is_not_repeated():
+    from biomni_hypo.llm import _api_error_hint
+
+    hint = _api_error_hint("{'success': False, 'error': 'API error: 500'}")
+    assert "Do not repeat the same call" in hint
+
+
+def test_a_successful_observation_gets_no_api_hint():
+    from biomni_hypo.llm import _api_error_hint
+
+    assert _api_error_hint("PubMed Results: Title: BushenHuoxue formula ...") == ""
+    assert _api_error_hint("{'success': True, 'data': [1, 2]}") == ""

@@ -414,6 +414,41 @@ def _unavailable_hint(text: str) -> str:
     return ""
 
 
+#: UniProt が返す `Invalid fields parameter value 'function'`
+# 引用符はエスケープされて届くことがある（入れ子の JSON: \'function\'）。
+# エスケープ無しだけを見ていると、本番のテキストに当たらない（実測で踏んだ）
+_INVALID_FIELDS = re.compile(r"Invalid fields parameter value \\?['\"]([\w,]+)")
+
+#: UniProt の返却フィールド名は UI の見出しと違う。モデルは UI の言葉で書く。
+#: 確実なものだけを挙げること。曖昧な対応表を出すと別の間違いを誘発する。
+UNIPROT_FIELD_NUDGE = (
+    "[api] UniProt rejected these `fields` values: {bad}. "
+    "The simplest fix is to DROP the `fields=` parameter entirely - "
+    "UniProt then returns its default fields, which is enough. "
+    "If you keep it, only these are safe: accession, id, protein_name, "
+    "gene_names, organism_name, cc_function. "
+    "Also join query terms with `+AND+`, not `&`."
+)
+
+#: ツールがエラーを返したのに、同じ呼び方を繰り返すのを止める
+TOOL_ERROR_NUDGE = (
+    "[api] The last tool call failed. Do not repeat the same call unchanged. "
+    "Either simplify it (drop optional parameters) or use a different tool "
+    "or a different database."
+)
+
+
+def _api_error_hint(text: str) -> str:
+    """外部 API がエラーを返したときに、次の一手を具体的にする。"""
+    text = text or ""
+    bad = _INVALID_FIELDS.findall(text)
+    if bad:
+        return UNIPROT_FIELD_NUDGE.format(bad=", ".join(dict.fromkeys(bad)))
+    if "'success': False" in text or '"success": false' in text.lower():
+        return TOOL_ERROR_NUDGE
+    return ""
+
+
 class FormatReminderLLM:
     """invoke のたびに、会話の最後尾へ出力形式の念押しを差し込む薄い包み。
 
@@ -451,7 +486,7 @@ class FormatReminderLLM:
         # 放っておくと同じ呼び方を繰り返して、ステップを捨て続ける
         last = messages[-1] if messages else None
         content = getattr(last, "content", "") or ""
-        for hint in (_signature_hint(content), _unavailable_hint(content)):
+        for hint in (_signature_hint(content), _unavailable_hint(content), _api_error_hint(content)):
             if hint:
                 text += "\n" + hint
         if self._min_steps:
