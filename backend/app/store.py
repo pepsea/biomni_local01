@@ -9,6 +9,7 @@ Postgres へ移す場合もこのモジュールの差し替えだけで済む�
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import threading
 from datetime import UTC, datetime
@@ -63,14 +64,58 @@ CREATE INDEX IF NOT EXISTS idx_events_run ON events(run_id, seq);
 FILTER_COLUMNS = ("provider", "model", "mode", "status", "organism")
 
 
+class StoreUnavailable(RuntimeError):
+    """DB を開けない。原因が分かる形にして投げ直す。
+
+    sqlite の "unable to open database file" は、実際には
+    「権限が無い」「親ディレクトリが作れない」「ネットワークマウントで
+    ロックが効かない」のどれでも同じ文言になる。そのままでは打つ手が無い。
+    """
+
+
 class RunStore:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        with self._connect() as conn:
-            conn.executescript(SCHEMA)
-            self._migrate(conn)
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise StoreUnavailable(
+                f"保存先のディレクトリを作れません: {self.path.parent.resolve()}\n"
+                f"  {type(exc).__name__}: {exc}\n"
+                f"  .env の HYPO_WORKSPACE を書ける場所に変えてください。"
+            ) from exc
+        try:
+            with self._connect() as conn:
+                conn.executescript(SCHEMA)
+                self._migrate(conn)
+        except sqlite3.OperationalError as exc:
+            raise StoreUnavailable(self._why_unavailable(exc)) from exc
+
+    def _why_unavailable(self, exc: Exception) -> str:
+        """開けない理由を、その場で調べて添える。"""
+        parent = self.path.parent
+        facts = [
+            f"データベースを開けません: {self.path.resolve()}",
+            f"  sqlite: {exc}",
+            f"  ディレクトリが在る : {parent.is_dir()}",
+            f"  ディレクトリに書ける: {os.access(parent, os.W_OK)}",
+        ]
+        if self.path.exists():
+            facts.append(f"  ファイルに書ける    : {os.access(self.path, os.W_OK)}")
+        # ネットワークマウントは sqlite のロックと相性が悪い。よくある原因なので
+        # 当てはまりそうなら名指しする
+        resolved = str(parent.resolve())
+        if resolved.startswith(("/mnt/", "/media/", "/net/")) or "nfs" in resolved:
+            facts.append(
+                "  → マウントされた場所に見えます。NFS などロックの効かない"
+                "ファイルシステムでは sqlite を開けないことがあります。"
+            )
+        facts.append(
+            "  .env の HYPO_WORKSPACE をローカルディスクの書ける場所に変えてください"
+            "（例: HYPO_WORKSPACE=$HOME/.biomni-hypo/workspace）。"
+        )
+        return "\n".join(facts)
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path, timeout=30)

@@ -96,7 +96,22 @@ async def index() -> FileResponse:
 
 SETTINGS = Settings()
 POLICY = ResourcePolicy.load(SETTINGS.policy_path)
-STORE = RunStore(Path(SETTINGS.workspace_path) / "runs.sqlite3")
+#: ラン保存。**import 時には開かない**。
+#:
+#: 以前はここで RunStore(...) を構築していたが、それだと
+#: `import backend.app.main` するだけでファイルシステムを触る。
+#: 書けない場所（権限、ネットワークマウント）だと、pytest の collection が
+#: そこで止まり、**関係の無いテストまで 1 件も走らない**（実測で踏んだ）。
+#: 最初に使うときに開く。
+_STORE: RunStore | None = None
+
+
+def store() -> RunStore:
+    """ラン保存を返す（初回アクセス時に開く）。"""
+    global _STORE
+    if _STORE is None:
+        _STORE = RunStore(Path(SETTINGS.workspace_path) / "runs.sqlite3")
+    return _STORE
 
 #: モデル一覧のキャッシュ（/api/tags と /api/show を毎回叩かない）
 _model_catalog: Any = None
@@ -182,7 +197,7 @@ async def _publish(run_id: str, kind: str, payload: dict[str, Any]) -> None:
     """永続化してから配信する（接続していない間の取りこぼしを防ぐ）。"""
     seq = _next_seq(run_id)
     if kind not in _EPHEMERAL_EVENTS:
-        STORE.append_event(run_id, seq, kind, payload)
+        store().append_event(run_id, seq, kind, payload)
     event = {"seq": seq, "kind": kind, "payload": payload}
     for q in list(_subscribers.get(run_id, ())):
         q.put_nowait(event)
@@ -212,20 +227,20 @@ async def _drain(run_id: str, proc: Any, mp_queue: Any) -> None:
                 break
             if kind == "result":
                 run = RunResult.model_validate(msg["payload"])
-                STORE.save(run)
+                store().save(run)
                 await _publish(run_id, "result", {"run_id": run_id, "status": run.status})
             else:
                 await _publish(run_id, kind, msg["payload"])
     finally:
         terminate_tree(proc, grace=5.0)
         cancelled = run_id in _cancelled
-        run = STORE.get(run_id)
+        run = store().get(run_id)
         if run and run.status == "running":
             run.status = "cancelled" if cancelled else "failed"
             if not cancelled:
                 run.error = run.error or "ワーカーが結果を返さずに終了しました"
             run.finished_at = datetime.now(UTC)
-            STORE.save(run)
+            store().save(run)
         await _publish(run_id, "done", {"status": run.status if run else "failed"})
         _running.pop(run_id, None)
         _cancelled.discard(run_id)
@@ -467,7 +482,7 @@ async def create_run(req: RunRequest) -> dict[str, Any]:
         config=settings.to_run_config(policy_version=POLICY.version),
     )
     run.extra["input_hints"] = [h.as_dict() for h in hints]
-    STORE.save(run)
+    store().save(run)
 
     proc, mp_queue = spawn(run_id, question.as_spec(), settings.model_dump())
     _running[run_id] = proc
@@ -502,7 +517,7 @@ async def list_runs(
     （空白区切りで AND）。他は完全一致の絞り込み。
     `facets` に絞り込みに使える値の一覧が入る（UI のプルダウン用）。
     """
-    return STORE.search(
+    return store().search(
         query=q,
         filters={
             "provider": provider,
@@ -520,7 +535,7 @@ async def list_runs(
 
 @app.get("/api/runs/{run_id}")
 async def get_run(run_id: str) -> RunResult:
-    run = STORE.get(run_id)
+    run = store().get(run_id)
     if run is None:
         raise HTTPException(404, "run not found")
     return run
@@ -528,7 +543,7 @@ async def get_run(run_id: str) -> RunResult:
 
 @app.get("/api/runs/{run_id}/report")
 async def get_report(run_id: str, format: str = "md") -> Any:
-    run = STORE.get(run_id)
+    run = store().get(run_id)
     if run is None:
         raise HTTPException(404, "run not found")
     if format == "json":
@@ -540,7 +555,7 @@ async def get_report(run_id: str, format: str = "md") -> Any:
 async def delete_run(run_id: str) -> dict[str, Any]:
     if run_id in _running:
         raise HTTPException(409, {"error": "run_in_progress", "detail": "実行中のランは削除できません"})
-    if not STORE.delete(run_id):
+    if not store().delete(run_id):
         raise HTTPException(404, "run not found")
     return {"run_id": run_id, "deleted": True}
 
@@ -557,11 +572,11 @@ async def cancel_run(run_id: str) -> dict[str, Any]:
         raise HTTPException(404, "実行中のランではありません")
 
     _cancelled.add(run_id)
-    run = STORE.get(run_id)
+    run = store().get(run_id)
     if run:
         run.status = "cancelled"
         run.finished_at = datetime.now(UTC)
-        STORE.save(run)
+        store().save(run)
     await _publish(run_id, "status", {"status": "cancelled"})
 
     # 実際の停止はブロックしうるのでスレッドに逃がす（イベントループを止めない）
@@ -573,7 +588,7 @@ async def cancel_run(run_id: str) -> dict[str, Any]:
 
 @app.get("/api/runs/{run_id}/events")
 async def stream_events(run_id: str, request: Request) -> StreamingResponse:
-    if STORE.get(run_id) is None:
+    if store().get(run_id) is None:
         raise HTTPException(404, "run not found")
 
     last_id = int(request.headers.get("last-event-id") or 0)
@@ -584,7 +599,7 @@ async def stream_events(run_id: str, request: Request) -> StreamingResponse:
         try:
             # 再接続時は永続化済みイベントを先に流す
             replayed_done = False
-            for ev in STORE.events_since(run_id, last_id):
+            for ev in store().events_since(run_id, last_id):
                 yield _sse(ev["seq"], ev["kind"], ev["payload"])
                 replayed_done = replayed_done or ev["kind"] == "done"
             # 終了済みのランは、追いつかせたらそこで閉じる（接続を開いたままにしない）

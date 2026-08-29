@@ -21,7 +21,7 @@ LOCAL_MODELS = [
 def client(tmp_path, monkeypatch):
     from backend.app.store import RunStore
 
-    monkeypatch.setattr(main, "STORE", RunStore(tmp_path / "runs.sqlite3"))
+    monkeypatch.setattr(main, "_STORE", RunStore(tmp_path / "runs.sqlite3"))
     monkeypatch.setattr(main, "_model_catalog", None)
     main._running.clear()
     main._subscribers.clear()
@@ -232,7 +232,7 @@ def test_stored_run_is_served_with_report(client):
     from biomni_hypo.schemas import RunResult
 
     run = RunResult(id="r_x", question="テスト", status="succeeded", steps=sample_steps())
-    main.STORE.save(run)
+    main.store().save(run)
 
     body = client.get("/api/runs/r_x").json()
     assert body["question"] == "テスト"
@@ -249,9 +249,9 @@ def test_stored_run_is_served_with_report(client):
 def test_events_replay_from_store(client):
     from biomni_hypo.schemas import RunResult
 
-    main.STORE.save(RunResult(id="r_e", question="q"))
-    main.STORE.append_event("r_e", 1, "status", {"status": "running"})
-    main.STORE.append_event("r_e", 2, "done", {"status": "succeeded"})
+    main.store().save(RunResult(id="r_e", question="q"))
+    main.store().append_event("r_e", 1, "status", {"status": "running"})
+    main.store().append_event("r_e", 2, "done", {"status": "succeeded"})
 
     with client.stream("GET", "/api/runs/r_e/events") as r:
         text = "".join(chunk for chunk in r.iter_text())
@@ -342,7 +342,7 @@ def test_cancel_marks_the_run_and_frees_the_slot(client, monkeypatch):
     from biomni_hypo.schemas import RunResult
 
     proc = _FakeProc()
-    main.STORE.save(RunResult(id="r_cancel", question="q", status="running"))
+    main.store().save(RunResult(id="r_cancel", question="q", status="running"))
     main._running["r_cancel"] = proc
 
     r = client.post("/api/runs/r_cancel/cancel")
@@ -350,7 +350,7 @@ def test_cancel_marks_the_run_and_frees_the_slot(client, monkeypatch):
     assert r.status_code == 200
     assert r.json()["status"] == "cancelled"
     assert proc.terminated, "プロセスを止めていない"
-    assert main.STORE.get("r_cancel").status == "cancelled"
+    assert main.store().get("r_cancel").status == "cancelled"
 
     main._running.pop("r_cancel", None)
     main._cancelled.discard("r_cancel")
@@ -363,7 +363,7 @@ def test_cancel_unknown_run(client):
 def test_cannot_delete_a_running_run(client):
     from biomni_hypo.schemas import RunResult
 
-    main.STORE.save(RunResult(id="r_busy", question="q", status="running"))
+    main.store().save(RunResult(id="r_busy", question="q", status="running"))
     main._running["r_busy"] = _FakeProc()
     try:
         assert client.delete("/api/runs/r_busy").status_code == 409
@@ -374,7 +374,7 @@ def test_cannot_delete_a_running_run(client):
 def test_delete_a_finished_run(client):
     from biomni_hypo.schemas import RunResult
 
-    main.STORE.save(RunResult(id="r_old", question="q", status="succeeded"))
+    main.store().save(RunResult(id="r_old", question="q", status="succeeded"))
     assert client.delete("/api/runs/r_old").status_code == 200
     assert client.get("/api/runs/r_old").status_code == 404
     assert client.delete("/api/runs/r_old").status_code == 404
