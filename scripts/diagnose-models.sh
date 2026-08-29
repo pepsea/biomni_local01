@@ -14,7 +14,7 @@ ng()  { printf '  \033[31m✗\033[0m %s\n' "$1"; }
 
 PORT="${1:-}"
 if [[ -z "$PORT" ]]; then
-  PORT=$(sed -n 's/^APP_PORT=//p' .env 2>/dev/null | head -1); PORT="${PORT:-8000}"
+  PORT=$(sed -n 's/^APP_PORT=//p' .env 2>/dev/null | head -1); PORT="${PORT:-5002}"
 fi
 BASE="http://localhost:${PORT}"
 

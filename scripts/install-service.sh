@@ -74,7 +74,7 @@ else
 fi
 MODEL=$(sed -n 's/^HYPO_MODEL=//p' .env | head -1)
 ok "使うモデル: ${MODEL:-qwen3:14b}"
-PORT=$(sed -n 's/^APP_PORT=//p' .env | head -1); PORT="${PORT:-8000}"
+PORT=$(sed -n 's/^APP_PORT=//p' .env | head -1); PORT="${PORT:-5002}"
 BIND=$(sed -n 's/^APP_BIND=//p' .env | head -1); BIND="${BIND:-0.0.0.0}"
 ok "待ち受け: ${BIND}:${PORT}  （.env の APP_PORT / APP_BIND で変えられます）"
 

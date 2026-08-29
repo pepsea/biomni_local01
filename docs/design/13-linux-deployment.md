@@ -31,7 +31,7 @@ make service-install
 3. `data` / `workspace` の作成
 4. systemd ユニットの設置・有効化・起動
 
-http://localhost:8000 が開く。初回はイメージのビルドとモデル取得（約 9GB）で
+http://localhost:5002 が開く。初回はイメージのビルドとモデル取得（約 9GB）で
 数分〜数十分かかる。進行は `docker compose logs -f ollama-pull` で見える。
 
 ### sudo を使いたくない場合
@@ -128,7 +128,7 @@ make docker-rebuild          # または sudo systemctl restart biomni-hypo
 
 | 変数 | 既定 | 意味 |
 | --- | --- | --- |
-| `APP_PORT` | `8000` | ホスト側の待ち受けポート |
+| `APP_PORT` | `5002` | ホスト側の待ち受けポート |
 | `APP_BIND` | `0.0.0.0` | 待ち受けるインタフェース。外に出したくないなら `127.0.0.1` |
 | `OLLAMA_PORT` | `11434` | Ollama をホストから使う場合のポート |
 | `OLLAMA_BIND` | `127.0.0.1` | 既定でループバックのみ。外部には出さない |
@@ -162,12 +162,12 @@ bash scripts/start.sh --port 9000
 
 ## 13.8 公開する場合
 
-既定では `8000` をすべてのインタフェースで待ち受ける。**認証は無い**（01 §1.3）。
+既定では `5002` をすべてのインタフェースで待ち受ける。**認証は無い**（01 §1.3）。
 LAN や外部に出すなら、前段にリバースプロキシを置いて認証を掛けること。
 
 ```nginx
 location / {
-    proxy_pass http://127.0.0.1:8000;
+    proxy_pass http://127.0.0.1:5002;
     proxy_http_version 1.1;
     proxy_set_header Connection "";      # SSE を切らないため
     proxy_buffering off;                 # ← 実況が届かなくなるので必須

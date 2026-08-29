@@ -135,7 +135,7 @@ cat <<MSG
 
     source $VENV/bin/activate
     jupyter lab notebooks/        # 00 -> 01 の順で実行（01 が最重要）
-    make api                      # http://localhost:8000/docs
+    make api                      # http://localhost:5002/docs
 
   Ollama 無しでも動くもの:
     pytest -q                              # 全テスト

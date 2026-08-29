@@ -14,7 +14,7 @@ warn(){ printf '  \033[33m!\033[0m %s\n' "$1"; }
 
 env_of() { sed -n "s/^$1=//p" .env 2>/dev/null | head -1; }
 
-APP_PORT="${APP_PORT:-$(env_of APP_PORT)}"; APP_PORT="${APP_PORT:-8000}"
+APP_PORT="${APP_PORT:-$(env_of APP_PORT)}"; APP_PORT="${APP_PORT:-5002}"
 OLLAMA_PORT=$(env_of OLLAMA_PORT); OLLAMA_PORT="${OLLAMA_PORT:-11434}"
 PROFILES=$(env_of COMPOSE_PROFILES)
 PROVIDER=$(env_of HYPO_PROVIDER);  PROVIDER="${PROVIDER:-ollama}"

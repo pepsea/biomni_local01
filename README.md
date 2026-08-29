@@ -198,7 +198,7 @@ Python の環境で悩みたくないならこれが確実です。イメージ�
 make docker-up          # ビルドして常駐起動
 ```
 
-http://localhost:8000 が開きます。初回はモデル取得（約 9GB）に時間がかかるので
+http://localhost:5002 が開きます。初回はモデル取得（約 9GB）に時間がかかるので
 `make docker-logs` で進行を見てください。`restart: unless-stopped` なので、
 `make docker-down` するまで動き続けます（マシン再起動後も復帰します）。
 
@@ -307,7 +307,7 @@ make up                      # または: bash scripts/start.sh
   ✓ 使えるモデル 2 件: qwen3:14b, qwen3:8b
       既定: qwen3:14b（ローカル）
 == 起動
-  ブラウザで  http://localhost:8000  を開いてください（停止は Ctrl-C）
+  ブラウザで  http://localhost:5002  を開いてください（停止は Ctrl-C）
 ```
 
 | コマンド | 用途 |
@@ -342,7 +342,7 @@ make doctor
 
 Jupyter のセルからなら `%pip install <パッケージ>` を使ってください（カーネルの Python に入ります）。
 
-ブラウザで **http://localhost:8000** を開きます。
+ブラウザで **http://localhost:5002** を開きます。
 
 ```
 モード  ● 仮説生成   ○ 根拠検証   ○ データ解釈
@@ -378,11 +378,11 @@ python scripts/ask.py --template resistance --dry-run    # プロンプトだけ
 ```
 
 ```bash
-curl -s localhost:8000/api/models                   # ローカルのモデル一覧
-curl -X POST localhost:8000/api/runs -H 'content-type: application/json' \
+curl -s localhost:5002/api/models                   # ローカルのモデル一覧
+curl -X POST localhost:5002/api/runs -H 'content-type: application/json' \
   -d '{"question": "TNBC で PARP 阻害剤耐性を規定する因子は？", "model": "qwen3:14b"}'
-curl -N localhost:8000/api/runs/<run_id>/events     # SSE でトレースが流れる
-curl -s localhost:8000/api/runs/<run_id>/report     # Markdown レポート
+curl -N localhost:5002/api/runs/<run_id>/events     # SSE でトレースが流れる
+curl -s localhost:5002/api/runs/<run_id>/report     # Markdown レポート
 ```
 
 Docker なら `docker compose up`（ollama + api）。

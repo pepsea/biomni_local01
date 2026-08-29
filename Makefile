@@ -73,7 +73,7 @@ doctor:
 	bash scripts/doctor.sh
 
 api:
-	uvicorn backend.app.main:app --reload --port 8000
+	uvicorn backend.app.main:app --reload --port 5002
 
 models:
 	python scripts/list_models.py
@@ -87,9 +87,9 @@ check: lint test
 # restart: unless-stopped なので、明示的に down するまで動き続ける。
 # マシンを再起動しても Docker が上がればアプリも戻る。
 
-# ポートは .env の APP_PORT で変える（既定 8000）
+# ポートは .env の APP_PORT で変える（既定 5002）
 APP_PORT ?= $(shell sed -n 's/^APP_PORT=//p' .env 2>/dev/null | head -1)
-APP_PORT := $(if $(APP_PORT),$(APP_PORT),8000)
+APP_PORT := $(if $(APP_PORT),$(APP_PORT),5002)
 
 docker-up:
 	mkdir -p data workspace

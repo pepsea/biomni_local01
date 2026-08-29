@@ -49,7 +49,7 @@ fi
 ok "依存 OK"
 
 [[ -f .env ]] || { cp .env.example .env; ok ".env を作成しました"; }
-PORT=$(sed -n 's/^APP_PORT=//p' .env | head -1); PORT="${PORT:-8000}"
+PORT=$(sed -n 's/^APP_PORT=//p' .env | head -1); PORT="${PORT:-5002}"
 BIND=$(sed -n 's/^APP_BIND=//p' .env | head -1); BIND="${BIND:-127.0.0.1}"
 OLLAMA_URL=$(sed -n 's/^OLLAMA_BASE_URL=//p' .env | head -1)
 ok "待ち受け: ${BIND}:${PORT}"

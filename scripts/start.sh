@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Web アプリを起動する。起動前に環境を確認して、足りないものを具体的に指摘する。
 #
-#   bash scripts/start.sh                 # http://localhost:8000
+#   bash scripts/start.sh                 # http://localhost:5002
 #   bash scripts/start.sh --port 9000     # ポートを変える
 #                                         # （.env の APP_PORT でも指定できます）
 #   bash scripts/start.sh --check         # 確認だけして起動しない
@@ -10,10 +10,10 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 # .env の APP_PORT があればそれを既定にする（Docker 版と揃える）
-PORT="${APP_PORT:-8000}"
+PORT="${APP_PORT:-5002}"
 if [[ -z "${APP_PORT:-}" && -f .env ]]; then
   PORT=$(sed -n 's/^APP_PORT=//p' .env | head -1)
-  PORT="${PORT:-8000}"
+  PORT="${PORT:-5002}"
 fi
 CHECK_ONLY=0
 RELOAD=""

@@ -200,3 +200,41 @@ def test_preflight_allows_a_port_held_by_our_own_container(tmp_path):
         sock.close()
 
     assert f"APP_PORT={port} は使えます" in proc.stdout
+
+
+# ------------------------------------------------------- 既定ポートの食い違い
+# ホスト側の待ち受けポートは .env.example / compose / Makefile / 各スクリプトの
+# 5 箇所以上に既定値として書いてある。1 箇所だけ変えると、起動したポートと
+# 案内された URL が食い違い、「開かない」の原因が分からなくなる。
+#
+# コンテナ内のポート（Dockerfile の EXPOSE、compose の右辺、healthcheck）は
+# 別物なので対象にしない。
+
+ROOT = Path(__file__).resolve().parents[1]
+
+#: (ファイル, 既定値を取り出す正規表現)
+DEFAULT_PORT_SOURCES = (
+    (".env.example", r"^APP_PORT=(\d+)"),
+    ("Makefile", r"APP_PORT := \$\(if \$\(APP_PORT\),\$\(APP_PORT\),(\d+)\)"),
+    ("docker-compose.yml", r"\$\{APP_PORT:-(\d+)\}:\d+"),
+    ("scripts/start.sh", r'PORT="\$\{APP_PORT:-(\d+)\}"'),
+    ("scripts/docker-preflight.sh", r'APP_PORT="\$\{APP_PORT:-(\d+)\}"'),
+    ("scripts/install-local-service.sh", r'PORT="\$\{PORT:-(\d+)\}"'),
+    ("scripts/install-service.sh", r'PORT="\$\{PORT:-(\d+)\}"'),
+    ("scripts/diagnose-app.sh", r'PORT="\$\{PORT:-(\d+)\}"'),
+    ("scripts/diagnose-models.sh", r'PORT="\$\{PORT:-(\d+)\}"'),
+    ("scripts/set-provider.sh", r'PORT_NOW="\$\{PORT_NOW:-(\d+)\}"'),
+)
+
+
+def test_the_default_port_is_the_same_everywhere() -> None:
+    found: dict[str, str] = {}
+    for name, pattern in DEFAULT_PORT_SOURCES:
+        text = (ROOT / name).read_text(encoding="utf-8")
+        match = re.search(pattern, text, re.MULTILINE)
+        assert match, f"{name} から既定ポートを読めません（書き方を変えたなら正規表現も直すこと）"
+        found[name] = match.group(1)
+
+    assert len(set(found.values())) == 1, "既定ポートが食い違っています:\n  " + "\n  ".join(
+        f"{k}: {v}" for k, v in found.items()
+    )

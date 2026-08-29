@@ -258,7 +258,7 @@ grep -E '^(HYPO_PROVIDER|HYPO_MODEL|BIOMNI_LLM|BIOMNI_SOURCE|COMPOSE_PROFILES|AP
   sed 's/^/  /'
 has_key && echo "  ANTHROPIC_API_KEY=...（設定済み・非表示）"
 
-PORT_NOW=$(sed -n 's/^APP_PORT=//p' .env | head -1); PORT_NOW="${PORT_NOW:-8000}"
+PORT_NOW=$(sed -n 's/^APP_PORT=//p' .env | head -1); PORT_NOW="${PORT_NOW:-5002}"
 say "反映する"
 cat <<MSG
   Docker で常設している場合:

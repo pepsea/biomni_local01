@@ -16,7 +16,7 @@
 make docker-up          # docker compose up -d --build
 ```
 
-http://localhost:8000 が開く。
+http://localhost:5002 が開く。
 
 | コマンド | 用途 |
 | --- | --- |

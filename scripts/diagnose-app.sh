@@ -79,7 +79,7 @@ PYCHECK
 
 # --------------------------------------------------------------- 3. アプリ
 if [[ $IN_DOCKER -eq 1 ]]; then
-  PORT=$(sed -n 's/^APP_PORT=//p' .env 2>/dev/null | head -1); PORT="${PORT:-8000}"
+  PORT=$(sed -n 's/^APP_PORT=//p' .env 2>/dev/null | head -1); PORT="${PORT:-5002}"
   say "3. /api/health"
   if curl -sf -m 5 "http://localhost:${PORT}/api/health" >/tmp/_h.json 2>/dev/null; then
     "$PY" - <<'PYJ' 2>/dev/null || cat /tmp/_h.json
