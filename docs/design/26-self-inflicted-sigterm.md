@@ -107,3 +107,42 @@ FastAPI の既定の 500 は**本文が空**です。フロントは
   にして、診断の改行を潰さないようにした。
 
 これで、次に同じことが起きたときは画面に原因が出ます。
+
+---
+
+## 付記 2: テストが開発機の Ollama を掴んでいた
+
+`bash scripts/setup_local.sh` が 1 件だけ失敗する報告がありました。
+
+```
+FAILED tests/test_api.py::test_run_without_ollama_is_rejected - assert 202 == 422
+1 failed, 364 passed, 17 skipped
+```
+
+`test_run_without_ollama_is_rejected` は「Ollama が居なければラン開始前に
+422 で止める」ことを見るテストです。ところが `client` fixture は
+`ollama_base_url` を指定していませんでした。既定値は
+`http://localhost:11434` — つまり **開発機で動いている本物の Ollama** です。
+
+Ollama を立てていない機械（CI やこちらの検証環境）では届かないので 422 になり、
+テストは通ります。**Ollama を立てている利用者の環境でだけ 202 になって落ちます。**
+このプロジェクトでは Ollama が動いているほうが普通の状態なので、
+落ちるほうが多数派です。
+
+既定のポートで模擬 Ollama を立てると、手元でもそのまま再現しました。
+
+```
+$ python fake_ollama.py &          # 127.0.0.1:11434 で /api/tags を返す
+$ pytest -q tests/test_api.py::test_run_without_ollama_is_rejected
+FAILED ... assert 202 == 422
+```
+
+`client` fixture が `http://127.0.0.1:1`（誰も待ち受けていないポート）を
+向くようにしました。他のテストは元から模擬サーバか同じアドレスを明示して
+いたので、穴はこの fixture だけでした。
+
+同じことが起きないよう、fixture の向き先そのものを見るテストを 1 本置いています。
+模擬 Ollama を既定のポートで立てたまま全件走らせて、422 passed を確認しました。
+
+**テストが環境から拾ってよい既定値はありません。** 外に出る設定は
+fixture 側で必ず塞ぐこと。

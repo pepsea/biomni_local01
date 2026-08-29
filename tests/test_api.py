@@ -16,6 +16,11 @@ LOCAL_MODELS = [
     ("llama3.1:8b", 4_900_000_000, 131072),
 ]
 
+#: 誰も待ち受けていないポート。既定は http://localhost:11434 なので、そのままだと
+#: テストが**開発機で動いている本物の Ollama** に届く。Ollama を立てている人の
+#: 環境だけ test_run_without_ollama_is_rejected が 202 で落ちた（実測で踏んだ）。
+UNREACHABLE_OLLAMA = "http://127.0.0.1:1"
+
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
@@ -23,6 +28,9 @@ def client(tmp_path, monkeypatch):
 
     monkeypatch.setattr(main, "_STORE", RunStore(tmp_path / "runs.sqlite3"))
     monkeypatch.setattr(main, "_model_catalog", None)
+    settings = main.SETTINGS.model_copy(deep=True)
+    settings.ollama_base_url = UNREACHABLE_OLLAMA
+    monkeypatch.setattr(main, "SETTINGS", settings)
     main._running.clear()
     main._subscribers.clear()
     main._seq.clear()
@@ -108,7 +116,11 @@ def test_run_with_model_not_pulled_is_rejected_with_a_hint(client_with_ollama):
 
 
 def test_run_without_ollama_is_rejected(client):
-    """Ollama 未起動なら、ラン開始前に 422 で止める。"""
+    """Ollama 未起動なら、ラン開始前に 422 で止める。
+
+    client fixture が届かないアドレスを向いていることに依存する。
+    既定値のままだと開発機の本物の Ollama に届き、この環境だけ 202 になる。
+    """
     r = client.post("/api/runs", json={"question": QUESTION})
     assert r.status_code == 422
     assert "model_unavailable" in r.text
@@ -310,7 +322,7 @@ def test_providers_readiness_reflects_reality(client_with_ollama):
 
 def test_providers_local_not_ready_when_ollama_is_down(client, monkeypatch):
     settings = main.SETTINGS.model_copy(deep=True)
-    settings.ollama_base_url = "http://127.0.0.1:1"
+    settings.ollama_base_url = UNREACHABLE_OLLAMA
     monkeypatch.setattr(main, "SETTINGS", settings)
     monkeypatch.setattr(main, "_model_catalog", None)
     by_name = {p["name"]: p for p in client.get("/api/providers").json()["providers"]}
@@ -455,3 +467,12 @@ def test_store_that_cannot_open_says_why(client, monkeypatch):
     detail = r.json()["detail"]
     assert detail["error"] == "store_unavailable"
     assert "データベースを開けません" in detail["detail"]
+
+
+def test_the_client_fixture_never_reaches_a_real_ollama(client):
+    """テストが開発機の Ollama を掴まないこと。
+
+    掴むと結果が機械ごとに変わる。Ollama を立てている利用者の環境でだけ
+    テストが落ちた（実測で踏んだ）。fixture の側で塞ぐ。
+    """
+    assert main.SETTINGS.ollama_base_url == UNREACHABLE_OLLAMA
