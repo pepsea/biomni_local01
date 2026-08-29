@@ -92,6 +92,8 @@ class AgentBundle:
     unusable_modules: dict[str, str] = field(default_factory=dict)
     #: 関数内 import の依存が足りず外したツール名 -> 不足パッケージ
     unusable_tools: dict[str, str] = field(default_factory=dict)
+    #: 実行環境の名前空間に入れたツールの数（§38）
+    preloaded_tools: int = 0
 
     @property
     def estimated_prompt_tokens(self) -> int:
@@ -219,6 +221,9 @@ def build_agent(
     # module2api を変更したので、システムプロンプトを作り直す。
     agent.configure()
 
+    # 案内したツールを、実行環境の名前空間にそのまま置く（§38）。
+    injected = _preload_tools(agent)
+
     tool_count = sum(len(v) for v in agent.module2api.values())
     bundle = AgentBundle(
         agent=agent,
@@ -232,6 +237,7 @@ def build_agent(
         token_stream=token_stream,
         unusable_modules=unusable,
         unusable_tools=unusable_tools,
+        preloaded_tools=len(injected),
     )
     if not agent.module2api:
         raise RuntimeError(
@@ -391,6 +397,49 @@ def _resolve_model_and_source(args: tuple[Any, ...], kwargs: dict[str, Any]) -> 
         # biomni はモデル名から推定する。claude で始まれば Anthropic
         source = "Anthropic" if str(model).startswith("claude") else ""
     return str(model), str(source)
+
+
+def _preload_tools(agent: Any) -> list[str]:
+    """案内したツールを、コードを実行する名前空間に入れておく。
+
+    biomni の run_python_repl は空の dict（_persistent_namespace）で
+    exec するだけで、ツールは 1 つも入っていない。モデルは自分で
+    import しなければならないが、システムプロンプトの一覧には
+    **どのモジュールにあるかが書かれていない**。
+
+    実測: query_pubmed を biomni.tool.database から import しようとして
+    失敗し、モジュール名を変えては失敗し、を 28 ステップ繰り返して
+    <solution> に到達しなかった。query_pubmed は biomni.tool.literature。
+
+    名前で呼べば動くようにすれば、この推測ごと不要になる。
+    """
+    import importlib
+
+    try:
+        from biomni.tool import support_tools
+    except ImportError:  # pragma: no cover - biomni が無い環境
+        return []
+
+    namespace = getattr(support_tools, "_persistent_namespace", None)
+    if namespace is None:
+        log.warning("_persistent_namespace が見つかりません。ツールの事前読み込みを飛ばします")
+        return []
+
+    loaded: list[str] = []
+    for module_name, apis in (agent.module2api or {}).items():
+        try:
+            module = importlib.import_module(module_name)
+        except Exception as exc:  # noqa: BLE001 - 1 つ失敗しても他は入れる
+            log.debug("ツールモジュールを読み込めません: %s (%s)", module_name, exc)
+            continue
+        for api in apis:
+            name = api.get("name")
+            func = getattr(module, name, None) if name else None
+            if func is not None:
+                namespace[name] = func
+                loaded.append(name)
+    log.info("実行環境に %d 個のツールを読み込みました", len(loaded))
+    return loaded
 
 
 def _restrict_modules(agent: Any, tool_modules: tuple[str, ...] | None) -> list[str]:

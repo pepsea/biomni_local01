@@ -560,3 +560,23 @@ def test_offline_mode_overrides_the_tool_query_model(policy, monkeypatch):
     patch_biomni_get_llm(settings, policy)
     llm = biomni_llm.get_llm(model="qwen3:14b", temperature=0.0)
     assert type(llm).__name__ == "ChatOllama"
+
+
+def test_advertised_tools_are_callable_by_name(policy):
+    """案内したツールは、import 無しで名前だけで呼べること。
+
+    biomni の run_python_repl は空の名前空間で exec するだけで、ツールは
+    1 つも入っていない。しかもシステムプロンプトの一覧には、どのモジュールに
+    あるかが書かれていない。実測で 28 ステップを import の当てずっぽうに
+    費やした（docs/design/38）。
+    """
+    from biomni_hypo.agent_factory import _preload_tools
+
+    with MockOllama(replies=["ok"]) as mock:
+        bundle = build_agent(_settings(mock), policy)
+    names = _preload_tools(bundle.agent)
+    assert names, "1 つも読み込めていない"
+
+    advertised = {a["name"] for apis in bundle.agent.module2api.values() for a in apis}
+    missing = sorted(advertised - set(names))
+    assert not missing, f"案内しているのに名前空間に無い: {missing[:5]}"

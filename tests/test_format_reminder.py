@@ -268,3 +268,30 @@ def test_the_hint_reaches_the_model():
     text = seen["messages"][-1].content
     assert "has no parameter `max_result`" in text
     assert "prompt" in text
+
+
+# --------------------------------------- 使えないツールを呼び続けるのを止める
+# 実測: query_pubmed を import しようとして失敗し、モジュール名を変えては
+# 失敗し、を 28 ステップ繰り返して <solution> に到達しなかった。
+
+
+@pytest.mark.parametrize(
+    "observation",
+    [
+        "Error: name 'query_pubmed' is not defined",
+        "Error: module 'biomni.tool.database' has no attribute 'query_pubmed'",
+    ],
+)
+def test_an_unavailable_tool_is_not_retried(observation):
+    from biomni_hypo.llm import _unavailable_hint
+
+    hint = _unavailable_hint(observation)
+    assert "`query_pubmed` is not available" in hint
+    assert "do not retry" in hint.lower()
+    assert "without any import" in hint, "import が要らないことまで言う"
+
+
+def test_a_normal_observation_gets_no_unavailable_hint():
+    from biomni_hypo.llm import _unavailable_hint
+
+    assert _unavailable_hint("BRCA1 に 12 件ヒットしました") == ""

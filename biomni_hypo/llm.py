@@ -368,6 +368,33 @@ def _tool_parameters(name: str) -> list[str]:
     return []
 
 
+#: `name 'query_pubmed' is not defined` / `module 'x' has no attribute 'y'`
+_UNDEFINED = re.compile(r"name ['\"](\w+)['\"] is not defined")
+_NO_ATTR = re.compile(r"module ['\"][\w.]+['\"] has no attribute ['\"](\w+)['\"]")
+
+#: 使えないツールを呼び続けるのを止める。何が使えるかまで言うこと。
+UNAVAILABLE_NUDGE = (
+    "[tool] `{name}` is not available in this environment. "
+    "Do not import it and do not retry it. Use one of the available tools instead. "
+    "All available tools are already loaded by name - call them directly, "
+    "without any import statement."
+)
+
+
+def _unavailable_hint(text: str) -> str:
+    """使えないツールを呼んだときに、諦めさせて次へ進ませる。
+
+    実測: query_pubmed を import しようとして失敗し、モジュール名を変えては
+    失敗し、を 28 ステップ繰り返して <solution> に到達しなかった。
+    「無い」と言うだけでなく「import は要らない」まで言うこと。
+    """
+    for pattern in (_UNDEFINED, _NO_ATTR):
+        match = pattern.search(text or "")
+        if match:
+            return UNAVAILABLE_NUDGE.format(name=match.group(1))
+    return ""
+
+
 class FormatReminderLLM:
     """invoke のたびに、会話の最後尾へ出力形式の念押しを差し込む薄い包み。
 
@@ -404,9 +431,10 @@ class FormatReminderLLM:
         # 直前の観測が「そんな引数は無い」なら、正しい引数を添える。
         # 放っておくと同じ呼び方を繰り返して、ステップを捨て続ける
         last = messages[-1] if messages else None
-        hint = _signature_hint(getattr(last, "content", "") or "")
-        if hint:
-            text += "\n" + hint
+        content = getattr(last, "content", "") or ""
+        for hint in (_signature_hint(content), _unavailable_hint(content)):
+            if hint:
+                text += "\n" + hint
         if self._min_steps:
             done = sum(
                 1
