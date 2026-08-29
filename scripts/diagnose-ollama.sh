@@ -3,10 +3,11 @@
 #
 #   bash scripts/diagnose-ollama.sh
 #
-# 見るのは 3 か所。どこで切れているかで対処が変わる。
+# 見るのは 4 か所。どこで切れているかで対処が変わる。
 #   1. ホストから Ollama            -> Ollama 自体が動いているか
 #   2. アプリの設定 (.env)          -> どの URL を見に行くか
-#   3. コンテナから Ollama          -> Docker の場合。localhost はコンテナ自身を指す
+#   3. 読み込まれているモデル        -> 他のツールと取り合っていないか
+#   4. コンテナから Ollama          -> Docker の場合。localhost はコンテナ自身を指す
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -26,9 +27,10 @@ probe_in_container() {  # コンテナの中から見る
     "curl -sf -m 3 \"$1/api/tags\" >/dev/null 2>&1 && echo OK || echo NG" 2>/dev/null
 }
 
-PORT=$(sed -n 's/^OLLAMA_PORT=//p' .env 2>/dev/null | head -1); PORT="${PORT:-11434}"
-CONFIGURED=$(sed -n 's/^OLLAMA_BASE_URL=//p' .env 2>/dev/null | head -1)
-CONFIGURED="${CONFIGURED:-http://localhost:11434}"
+# 環境変数を優先する（テストから別ポートを指せるように）
+PORT="${OLLAMA_PORT:-$(sed -n 's/^OLLAMA_PORT=//p' .env 2>/dev/null | head -1)}"; PORT="${PORT:-11434}"
+CONFIGURED="${OLLAMA_BASE_URL:-$(sed -n 's/^OLLAMA_BASE_URL=//p' .env 2>/dev/null | head -1)}"
+CONFIGURED="${CONFIGURED:-http://localhost:${PORT}}"
 
 # ---------------------------------------------------------------- 1. ホスト
 say "1. ホストから Ollama が見えるか"
@@ -50,8 +52,51 @@ fi
 say "2. アプリが見に行く URL"
 echo "  .env の OLLAMA_BASE_URL = ${CONFIGURED}"
 
+
+# ------------------------------------------------ 3. 他のツールとの取り合い
+# 同じ Ollama を別のツールと共有していると、モデルの入れ替えとメモリの
+# 取り合いが起きる。生成が極端に遅くなり、こちらは wallclock / max_steps で
+# 打ち切られて <solution> に到達しない、という形で出る（docs/design/32）。
+say "3. いま Ollama に読み込まれているモデル"
+WANT="${HYPO_MODEL:-$(sed -n 's/^HYPO_MODEL=//p' .env 2>/dev/null | head -1)}"; WANT="${WANT:-qwen3:14b}"
+PS_JSON=$(curl -sf -m 3 "${FOUND:-$CONFIGURED}/api/ps" 2>/dev/null)
+if [[ -z "$PS_JSON" ]]; then
+  warn "/api/ps を取得できませんでした（古い Ollama では未対応です）"
+else
+  # コロンの後ろの空白は実装によって有無が変わる。空白なし前提だと 0 件に見える
+  LOADED=$(printf '%s' "$PS_JSON" \
+    | grep -o '"model"[[:space:]]*:[[:space:]]*"[^"]*"' \
+    | sed 's/.*"\([^"]*\)"$/\1/' | sort -u)
+  if [[ -z "$LOADED" ]]; then
+    ok "読み込み済みのモデルはありません（最初の 1 回は読み込みに時間がかかります）"
+  else
+    printf '      %s
+' $LOADED
+    OTHERS=$(printf '%s
+' $LOADED | grep -vx "$WANT" | tr '\n' ' ')
+    if [[ -n "${OTHERS// /}" ]]; then
+      warn "このアプリが使う ${WANT} 以外も読み込まれています: ${OTHERS}"
+      echo "      同じ Ollama を他のツールと共有すると、こうなります:"
+      echo "        - メモリを取り合い、層が CPU に溢れて生成が数倍〜数十倍遅くなる"
+      echo "        - モデルを切り替えるたびに読み込み直しが入る"
+      echo "        - 同じモデルへの同時要求は順番待ちになる"
+      echo "      遅くなると、こちらは打ち切られて <solution> に届かず、"
+      echo "      「回答が得られませんでした」になります。"
+      echo
+      echo "      確かめる:"
+      echo "        ollama ps                     # 何が載っているか・いつ降りるか"
+      echo "        他のツールを止めてから、もう一度実行する"
+      echo "      設定を見る（この 2 つは Ollama 側の設定です）:"
+      echo "        OLLAMA_MAX_LOADED_MODELS / OLLAMA_NUM_PARALLEL"
+    else
+      ok "${WANT} だけが読み込まれています"
+    fi
+  fi
+fi
+
+
 # ---------------------------------------------------------- 3. Docker かどうか
-say "3. アプリはどこで動いているか"
+say "4. アプリはどこで動いているか"
 IN_DOCKER=0
 if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx biomni-app; then
   IN_DOCKER=1
@@ -76,8 +121,8 @@ if [[ $IN_DOCKER -eq 0 ]]; then
   exit 0
 fi
 
-# --------------------------------------------- 4. コンテナの中から到達するか
-say "4. コンテナの中から Ollama が見えるか"
+# --------------------------------------------- 5. コンテナの中から到達するか
+say "5. コンテナの中から Ollama が見えるか"
 echo "  コンテナの中の localhost は「コンテナ自身」で、ホストではありません。"
 echo
 FOUND=""
@@ -100,10 +145,10 @@ if [[ -z "$FOUND" ]]; then
   echo "      Linux:    systemctl edit ollama    ->  Environment=\"OLLAMA_HOST=0.0.0.0\""
   echo "                sudo systemctl restart ollama"
   echo
-  echo "    そのあと:  bash scripts/set-provider.sh ollama && make docker-rebuild"
+  echo "    そのあと:  bash scripts/set-provider.sh ollama && make update"
   echo
   echo "  ホストの Ollama を使わず、コンテナ版で完結させる場合:"
-  echo "      bash scripts/set-provider.sh ollama && make docker-rebuild"
+  echo "      bash scripts/set-provider.sh ollama && make update"
   exit 1
 fi
 
@@ -111,7 +156,7 @@ if [[ "$CONFIGURED" == "$FOUND" ]]; then
   ok "設定は正しいです（${FOUND}）"
   echo
   echo "  それでも未接続と出るなら、コンテナが古い設定のままです:"
-  echo "      make docker-rebuild"
+  echo "      make update"
 else
   ng "設定が ${CONFIGURED} ですが、実際に届くのは ${FOUND} です"
   echo
@@ -121,5 +166,5 @@ else
   else
     echo "      .env に  OLLAMA_BASE_URL=${FOUND}  と書く"
   fi
-  echo "      make docker-rebuild"
+  echo "      make update"
 fi

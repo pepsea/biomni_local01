@@ -316,3 +316,80 @@ def test_update_help_does_not_touch_anything(tmp_path):
     assert proc.returncode == 0
     assert "--no-pull" in proc.stdout
     assert "常駐していません" not in proc.stdout, "--help なのに実行している"
+
+
+# --------------------------------------- 他のツールと Ollama を取り合っている
+# 同じ Ollama を別のツールと共有すると、モデルの入れ替えとメモリの取り合いで
+# 生成が極端に遅くなり、こちらは打ち切られて <solution> に届かない。
+# 「読み込まれているモデル」を見れば気付けるので、切り分けに入れる。
+
+
+class _FakeOllama:
+    """/api/tags と /api/ps を返すだけの Ollama。"""
+
+    def __init__(self, loaded: list[str], spaced: bool):
+        import json
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        tags = {"models": [{"name": "qwen3:14b", "model": "qwen3:14b"}]}
+        ps = {"models": [{"model": m} for m in loaded]}
+        # コロンの後ろの空白の有無は実装で変わる。両方を試す
+        dump = (lambda o: json.dumps(o)) if spaced else (lambda o: json.dumps(o, separators=(",", ":")))
+
+        class H(BaseHTTPRequestHandler):
+            def _send(self, obj):
+                body = dump(obj).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):  # noqa: N802
+                self._send(ps if self.path.endswith("/api/ps") else tags)
+
+            def log_message(self, *a):
+                pass
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), H)
+        self.port = self._server.server_address[1]
+        threading.Thread(target=self._server.serve_forever, daemon=True).start()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self._server.shutdown()
+        self._server.server_close()
+
+
+def _diagnose(port: int) -> str:
+    import os
+
+    proc = subprocess.run(  # noqa: S603
+        ["bash", str(ROOT / "scripts/diagnose-ollama.sh")],
+        capture_output=True, text=True, timeout=120, cwd=ROOT,
+        env={**os.environ, "OLLAMA_PORT": str(port),
+             "OLLAMA_BASE_URL": f"http://localhost:{port}", "HYPO_MODEL": "qwen3:14b"},
+    )
+    return proc.stdout
+
+
+@pytest.mark.parametrize("spaced", [True, False], ids=["空白あり", "空白なし"])
+def test_other_models_loaded_are_reported(spaced):
+    """他のツールのモデルが載っていたら名指しすること。"""
+    with _FakeOllama(["qwen3:14b", "gemma3:27b"], spaced) as mock:
+        out = _diagnose(mock.port)
+
+    assert "gemma3:27b" in out, out
+    assert "以外も読み込まれています" in out
+
+
+@pytest.mark.parametrize("spaced", [True, False], ids=["空白あり", "空白なし"])
+def test_our_model_alone_is_not_a_warning(spaced):
+    with _FakeOllama(["qwen3:14b"], spaced) as mock:
+        out = _diagnose(mock.port)
+
+    assert "だけが読み込まれています" in out, out
+    assert "以外も読み込まれています" not in out
