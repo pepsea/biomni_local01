@@ -61,7 +61,23 @@
   .msg.info { color:var(--muted); }
   pre { background:var(--card); border:1px solid var(--line); border-radius:6px; padding:9px;
         overflow-x:auto; font-family:var(--mono); font-size:11.5px; white-space:pre-wrap; margin:6px 0; }
-  .tabs { display:flex; gap:6px; margin-bottom:14px; flex-wrap:wrap; }
+  .tabs { display:flex; gap:6px; flex-wrap:wrap; }
+  /* 停止はタブ行の右端に置く。左パネルの一番下だと、フォームが長いので
+     画面外になって「停止ボタンが無い」になる（実測で踏んだ） */
+  .tabbar { display:flex; align-items:center; gap:12px; margin-bottom:14px; }
+  .tabbar .tabs { flex:1 1 auto; }
+  .tabbar button.stop { flex:0 0 auto; border:1px solid var(--err); color:var(--err);
+                        background:var(--card); border-radius:6px; padding:6px 14px;
+                        font-size:13px; font-weight:600; cursor:pointer; }
+  .tabbar button.stop:hover:not(:disabled) { background:var(--err); color:#fff; }
+  .tabbar button.stop:disabled { opacity:.5; cursor:default; }
+  /* 履歴は左下に常時出す。ヘッダ右端だと、調べている最中は目に入らない */
+  .corner { position:fixed; left:14px; bottom:12px; z-index:6; font-size:13px;
+            background:var(--bg); padding:4px 10px; border:1px solid var(--line);
+            border-radius:6px; }
+  .corner a { color:var(--accent); text-decoration:none; }
+  .corner a:hover { text-decoration:underline; }
+  .panel.left { padding-bottom:52px; }        /* 左下リンクと重ねない */
   .tabpage { display:none; } .tabpage.on { display:block; }
   h2 { font-size:12.5px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin:20px 0 8px; }
   h2:first-child { margin-top:0; }
@@ -144,8 +160,6 @@
 <header>
   <h1>Biomni 仮説構築</h1>
   <span class="meta" id="meta">読み込み中…</span>
-  <span class="spacer"></span>
-  <a href="/history">調査履歴 →</a>
 </header>
 
 <main>
@@ -191,16 +205,18 @@
     <div class="actions">
       <button class="primary" id="run">調べる</button>
       <button class="ghost" id="preview">プロンプトを確認</button>
-      <button class="ghost" id="cancel" style="display:none">停止</button>
     </div>
   </section>
 
   <section class="panel">
-    <div class="tabs" id="tabs">
-      <button data-tab="answer" aria-pressed="true">回答</button>
-      <button data-tab="hyp" aria-pressed="false">仮説</button>
-      <button data-tab="sources" aria-pressed="false">集めた情報</button>
-      <button data-tab="trace" aria-pressed="false">実行トレース</button>
+    <div class="tabbar">
+      <div class="tabs" id="tabs">
+        <button data-tab="answer" aria-pressed="true">回答</button>
+        <button data-tab="hyp" aria-pressed="false">仮説</button>
+        <button data-tab="sources" aria-pressed="false">集めた情報</button>
+        <button data-tab="trace" aria-pressed="false">実行トレース</button>
+      </div>
+      <button class="stop" id="cancel" style="display:none">■ 停止</button>
     </div>
     <div id="status"></div>
     <div class="tabpage on" id="tab-answer"><p class="empty">左で調べたいことを入力して「調べる」を押してください。</p></div>
@@ -209,6 +225,8 @@
     <div class="tabpage" id="tab-trace"></div>
   </section>
 </main>
+
+<div class="corner"><a href="/history">調査履歴 →</a></div>
 
 <div class="drawer" id="drawer"></div>
 

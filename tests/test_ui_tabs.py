@@ -160,3 +160,37 @@ def test_boot_notices_do_not_overwrite_each_other(html):
         "appendHints を使ってください"
     )
     assert "innerHTML = lines" not in body, "モデルの通知も追記にすること（+= を使う）"
+
+
+def test_the_stop_button_sits_next_to_the_trace_tab(html):
+    """停止は実行トレースと同じ行に置く。
+
+    実測: 停止は左パネルの一番下（フォームの末尾）にあった。フォームが長いので
+    ラン中に表示されても画面外で、「停止ボタンが無い」と見える。
+    """
+    bar = html[html.index('<div class="tabbar">') : html.index("</div>", html.index('id="cancel"'))]
+    assert 'data-tab="trace"' in bar, "実行トレースと同じ帯に無い"
+    assert 'id="cancel"' in bar, "停止が同じ帯に無い"
+
+
+def test_the_stop_button_is_not_a_tab(html):
+    """停止を #tabs の子にしないこと。
+
+    showTab は $("tabs").children を走査し、onclick は dataset.tab を見る。
+    停止を中に入れると押した瞬間 showTab(undefined) になり、
+    タブの中身がすべて消える。
+    """
+    tabs = html[html.index('<div class="tabs" id="tabs">') :]
+    tabs = tabs[: tabs.index("</div>")]
+    assert 'id="cancel"' not in tabs, "停止が #tabs の中にあります（押すとタブが空になります）"
+
+
+def test_the_history_link_is_in_the_bottom_left_corner(html):
+    """履歴は左下に常時出す。ヘッダ右端だと調べている最中は目に入らない。"""
+    assert '<div class="corner"><a href="/history">' in html
+    corner = html[html.index(".corner {") : html.index("}", html.index(".corner {"))]
+    assert "position:fixed" in corner
+    assert "left:" in corner and "bottom:" in corner, f"左下に固定していない: {corner}"
+
+    header = html[html.index("<header>") : html.index("</header>")]
+    assert "/history" not in header, "ヘッダにも残っていて 2 つある"
