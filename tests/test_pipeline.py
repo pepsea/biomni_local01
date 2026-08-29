@@ -240,3 +240,54 @@ def test_missing_reasoning_raises_a_flag(monkeypatch):
     assert r.answer
     assert not r.answer_reasoning
     assert r.extra.get("reasoning_missing") is True
+
+
+# --------------------------------------------------- 論点が無いときの言い分け
+# 実測: 「論点を抽出できませんでした」が、どのモデルでも毎回出た。
+# 一括りの文言だったため、モデルを替えても直らず原因も分からなかった。
+
+
+def _run_with_extraction(monkeypatch, payload: dict):
+    import json
+
+    import biomni_hypo.tracing as tracing
+
+    settings = Settings(offline_mode=True)
+    bundle = fake_bundle(TRACE_MESSAGES, settings=settings)
+    extractor = HypothesisExtractor(settings, llm=FakeLLM(json.dumps(payload, ensure_ascii=False)))
+    original = tracing.TracingRunner.__init__
+
+    def patched(self, b, run_id=None, *, guard_module=None):
+        original(self, b, run_id, guard_module=guard_module or FakeA1Module())
+
+    monkeypatch.setattr(tracing.TracingRunner, "__init__", patched)
+    return run_hypothesis(
+        QUESTION, settings=settings, bundle=bundle,
+        extractor=extractor, verifier=EvidenceVerifier(offline=True),
+    )
+
+
+def test_a_model_that_returned_nothing_is_named_as_such(monkeypatch):
+    r = _run_with_extraction(monkeypatch, {"answer": "結論", "hypotheses": []})
+    assert r.extra["reasoning_missing"] is True
+    assert "返しませんでした" in r.extra["reasoning_missing_reason"]
+
+
+def test_a_shape_we_could_not_use_is_named_as_such(monkeypatch):
+    r = _run_with_extraction(
+        monkeypatch,
+        {"answer": "結論", "hypotheses": [], "reasoning": [{"nope": 1}, {"also": 2}]},
+    )
+    assert "2 件" in r.extra["reasoning_missing_reason"]
+    assert "形が想定と違う" in r.extra["reasoning_missing_reason"]
+
+
+def test_a_salvageable_shape_produces_points(monkeypatch):
+    """キー名が違うだけの論点は使えること（これが本命の修正）。"""
+    r = _run_with_extraction(
+        monkeypatch,
+        {"answer": "結論", "hypotheses": [],
+         "reasoning": [{"question": "BRCA1 の状態が効くか", "observation": "効く"}]},
+    )
+    assert "reasoning_missing" not in r.extra
+    assert [p.point for p in r.answer_reasoning] == ["BRCA1 の状態が効くか"]

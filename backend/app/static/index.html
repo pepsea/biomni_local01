@@ -596,7 +596,7 @@ async function showResult(id) {
     ${r.extra?.parsing_errors ? `<div class="msg warning">⚠️ モデルがタグ付きの応答を出せず、biomni が ${r.extra.parsing_errors} 回差し戻しました。${esc(r.extra.parsing_error_hint||"")}</div>` : ""}
     ${r.extra?.stopped_reason ? `<div class="msg warning">⚠️ ${esc(r.extra.stopped_reason)}</div>` : ""}
     ${planBlock(r.plan, r.plan_revisions)}
-    ${reasoningBlock(r.answer_reasoning, r.answer_uncertainties)}
+    ${reasoningBlock(r.answer_reasoning, r.answer_uncertainties, r.extra?.reasoning_missing_reason)}
     <h2>この回答の根拠</h2>
     ${chips(r.answer_evidence) || '<div class="msg warning">⚠️ 検証を通った根拠が紐付いていません。</div>'}
     <h2>まとめ</h2>
@@ -666,12 +666,14 @@ function planBlock(plan, revisions) {
 const STANCE_LABEL = {supports:"支持", refutes:"反証", context:"判断材料"};
 const WEIGHT_LABEL = {decisive:"決め手", supporting:"補強", weak:"弱い"};
 
-function reasoningBlock(points, uncertainties) {
+function reasoningBlock(points, uncertainties, reason) {
   points = points || []; uncertainties = uncertainties || [];
   if (!points.length && !uncertainties.length) {
+    // 「抽出できませんでした」だけだと、モデルが返していないのか、こちらが
+    // 捨てたのか分からない。サーバが記録した理由をそのまま出す
     return `<h2>この結論に至った論点</h2>
-      <div class="msg warning">⚠️ 論点を抽出できませんでした。抽出モデルが結論だけを
-      返しています。より大きなモデル（qwen3:14b 以上、または Claude）を試すか、
+      <div class="msg warning">⚠️ 論点がありません${reason ? `（${esc(reason)}）` : ""}。
+      より大きなモデル（qwen3:14b 以上、または Claude）を試すか、
       「実行トレース」で調査の手順そのものを確認してください。</div>`;
   }
   let html = "";

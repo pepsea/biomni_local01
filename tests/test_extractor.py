@@ -195,3 +195,50 @@ def test_the_prompt_demands_reasoning():
     assert "reasoning" in HYPOTHESIS_JSON_SCHEMA["required"]
     assert "結論だけでは不十分" in PROMPT_TEMPLATE
     assert "refutes" in PROMPT_TEMPLATE
+
+
+# ----------------------------------------------------- reasoning の形の揺れ
+# 実測: 「論点を抽出できませんでした」が、どのモデルでも毎回出た。
+# モデルが返していなかったのではなく、仕様どおりでない形を全部捨てていた。
+# キー名の違い・文字列だけ・配列に入っていない、はどれも実際に起きる。
+
+BASE = {"answer": "A", "hypotheses": [], "answer_evidence": []}
+
+
+def _reasoning(raw):
+    return parse_response(json.dumps({**BASE, "reasoning": raw}, ensure_ascii=False), [])
+
+
+@pytest.mark.parametrize(
+    ("label", "raw"),
+    [
+        ("仕様どおり", [{"point": "X か", "finding": "Y", "stance": "supports"}]),
+        ("文字列の配列", ["X か"]),
+        ("キー名が違う", [{"question": "X か", "observation": "Y"}]),
+        ("別のキー名", [{"claim": "X か", "detail": "Y"}]),
+        ("所見だけ", [{"point": "", "finding": "Y"}]),
+        ("配列に入っていない", {"point": "X か", "finding": "Y"}),
+        ("入れ子", {"points": [{"point": "X か", "finding": "Y"}]}),
+    ],
+)
+def test_reasoning_shapes_are_salvaged(label, raw):
+    """形が違うだけの論点を捨てないこと。"""
+    result = _reasoning(raw)
+    assert result.answer_reasoning, f"{label}: 論点を捨てている"
+    assert result.reasoning_dropped == 0, f"{label}: {result.reasoning_dropped} 件捨てている"
+
+
+def test_a_missing_reasoning_is_distinguishable_from_a_dropped_one():
+    """「返さなかった」と「捨てた」を数で言い分けられること。"""
+    assert _reasoning(None).reasoning_seen == 0
+    assert _reasoning([]).reasoning_seen == 0
+
+    dropped = _reasoning([{"unrelated": 1}, {"also": 2}])
+    assert dropped.reasoning_seen == 2
+    assert dropped.reasoning_dropped == 2
+    assert not dropped.answer_reasoning
+
+
+def test_a_string_reasoning_keeps_the_point():
+    result = _reasoning(["BRCA1 変異は PARP 阻害剤感受性を高めるか"])
+    assert result.answer_reasoning[0].point == "BRCA1 変異は PARP 阻害剤感受性を高めるか"

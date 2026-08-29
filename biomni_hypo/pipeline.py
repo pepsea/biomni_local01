@@ -166,11 +166,22 @@ def run_hypothesis(
     if not result.answer_reasoning and result.answer:
         # 結論はあるのに論点が無い＝biomni 既定の「短い答え」に戻っている状態
         # （docs/design/18 §18.1）。黙って結論だけ出さず、必ず旗を立てる。
+        #
+        # 「モデルが返さなかった」のか「こちらが捨てた」のかを必ず言い分ける。
+        # 一括りに「抽出できませんでした」と出していたため、原因が分からず
+        # モデルを替えても直らない、という状態が続いた（docs/design/30）。
         result.extra["reasoning_missing"] = True
-        log.warning(
-            "回答は得られましたが論点が抽出できませんでした。"
-            "抽出モデルが結論だけを返しています（docs/design/18 §18.4）。"
-        )
+        if extraction.parse_error:
+            reason = f"抽出応答を読めませんでした（{extraction.parse_error}）"
+        elif extraction.reasoning_seen == 0:
+            reason = "抽出モデルが reasoning を返しませんでした"
+        else:
+            reason = (
+                f"reasoning は {extraction.reasoning_seen} 件ありましたが、"
+                f"形が想定と違うため使えませんでした"
+            )
+        result.extra["reasoning_missing_reason"] = reason
+        log.warning("回答は得られましたが論点がありません: %s", reason)
 
     result.status = "failed" if (result.error and not result.steps) else "succeeded"
     result.finished_at = datetime.now(UTC)

@@ -200,10 +200,10 @@ def _reasoning_lines(r: RunResult) -> list[str]:
                 lines.append("   - 根拠: なし（この論点は裏付けられていません）")
         lines.append("")
     elif r.answer:
-        lines += [
-            "> ⚠️ 論点を抽出できませんでした。抽出モデルが結論だけを返しています。",
-            "",
-        ]
+        # 画面と同じ理由を載せる。「抽出できませんでした」だけだと、
+        # モデルが返していないのか、こちらが捨てたのか分からない
+        why = (r.extra or {}).get("reasoning_missing_reason", "")
+        lines += [f"> ⚠️ 論点がありません{f'（{why}）' if why else ''}。", ""]
     if r.answer_uncertainties:
         lines += ["### 分からなかったこと", ""]
         lines += [f"- {u}" for u in r.answer_uncertainties]

@@ -180,6 +180,10 @@ class ExtractionResult:
     unknown_eids: list[str] = field(default_factory=list)
     raw_response: str = ""
     parse_error: str = ""
+    #: モデルが reasoning として返した項目数と、形が合わず使えなかった数。
+    #: 「モデルが返さなかった」と「こちらが捨てた」を区別するために持つ
+    reasoning_seen: int = 0
+    reasoning_dropped: int = 0
 
     @property
     def ok(self) -> bool:
@@ -366,6 +370,42 @@ def _build_evidence(
     return out
 
 
+#: point / finding に使われがちなキー名。
+#: モデルは仕様どおりの名前を使うとは限らない。実測で、どのモデルも
+#: それぞれ違う崩し方をした。形が違うだけの論点を捨てると、画面には
+#: 「論点を抽出できませんでした」としか出ず、原因が分からない。
+_POINT_KEYS = ("point", "question", "claim", "argument", "issue", "topic", "title", "statement")
+_FINDING_KEYS = (
+    "finding", "observation", "detail", "evidence_summary",
+    "result", "note", "rationale", "summary", "explanation",
+)
+
+
+def _reasoning_items(raw: Any) -> list[Any]:
+    """モデルが返した reasoning を、扱える並びにする。"""
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        return [raw] if raw.strip() else []
+    if isinstance(raw, dict):
+        for key in ("reasoning", "points", "items", "list"):
+            inner = raw.get(key)
+            if isinstance(inner, list):
+                return list(inner)
+        return [raw]                    # 論点 1 件を配列に入れ忘れた形
+    if isinstance(raw, list):
+        return list(raw)
+    return []
+
+
+def _first_text(item: dict[str, Any], keys: tuple[str, ...]) -> str:
+    for key in keys:
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
 def _build_reasoning(
     raw: Any, by_eid: dict[str, EvidenceCandidate], result: ExtractionResult
 ) -> list[ReasoningPoint]:
@@ -373,23 +413,35 @@ def _build_reasoning(
 
     根拠は _build_evidence を通すので、幻覚 ID は論点ごと捨てるのではなく
     根拠だけが落ちる。論点そのものは残す（「根拠が無い論点」も情報である）。
+
+    形の揺れは拾う。キー名が違う・文字列だけ・配列に入っていない、は
+    すべて実際に起きた（docs/design/30）。拾えなかった数は数えておくこと。
     """
+    items = _reasoning_items(raw)
+    result.reasoning_seen = len(items)
     out: list[ReasoningPoint] = []
-    for item in raw or []:
+    for item in items:
+        if isinstance(item, str):
+            # 論点を 1 行の文字列で返すモデルがある。問いだけでも情報になる
+            out.append(ReasoningPoint(point=item.strip()[:400], finding=""))
+            continue
         if not isinstance(item, dict):
             continue
-        point = str(item.get("point", "")).strip()
-        if not point:
+        point = _first_text(item, _POINT_KEYS)
+        finding = _first_text(item, _FINDING_KEYS)
+        if not point and not finding:
             continue
         out.append(
             ReasoningPoint(
-                point=point[:400],
-                finding=str(item.get("finding", "")).strip()[:800],
+                # 論点が無く所見だけなら、所見を論点として立てる（捨てるよりまし）
+                point=(point or finding)[:400],
+                finding=(finding if point else "")[:800],
                 stance=_stance(item.get("stance")),
                 weight=_weight(item.get("weight")),
                 evidence=_build_evidence(item.get("evidence"), by_eid, result),
             )
         )
+    result.reasoning_dropped = len(items) - len(out)
     return out
 
 
