@@ -67,3 +67,28 @@ es.onerror = () => {
   同じタブで開くと、進行中の画面を失います。
 
 いずれも構造をテストで縛っています。
+
+---
+
+## 使っていない方式のエラーで止まる
+
+```
+✗ Docker デーモンに接続できません
+```
+
+Docker を使わない構成なのに、更新のたびにこれが出ていました。
+原因は案内のほうです。常駐のさせ方が 3 通り（systemd ユーザー / launchd /
+Docker）あるのに、更新の手順として `make docker-rebuild` を書いていました。
+
+`bash scripts/update.sh`（`make update`）を足しました。
+
+1. `git pull --ff-only`
+2. **動いているものを探す** — systemd（ユーザー / システム）、launchd、
+   Docker の順に見て、動いている方式だけを入れ替える。
+   どれも動いていなければ、Docker のエラーではなく
+   「常駐していません」と言い、`start.sh` と `install-local-service.sh` を出す。
+3. `/api/health` を叩き、**ビルド ID が手元の HEAD と一致するか**まで見る。
+   一致しなければ古いプロセスが残っている。この確認が無かったので、
+   「pull したのに変わらない」を何度も往復した。
+
+README と INSTALL の更新手順も `make update` に統一しました。

@@ -108,10 +108,10 @@ curl -s http://localhost:5002/api/health | python3 -m json.tool
 | `make service-logs` | ログを追う |
 | `make service-update` | `git pull` して入れ替え |
 | `make service-uninstall` | 取り外す（`data/` `workspace/` は残る） |
-| `make docker-rebuild` | `.env` やコードの変更を反映 |
+| `make update` | `git pull` して、動いている形に合わせて再起動 |
 | `make ollama-check` | Ollama に繋がらないときの切り分け |
 
-`.env` を書き換えたら **`make docker-rebuild` が要ります**。
+`.env` を書き換えたら **`make update` が要ります**。
 `.env` はプロセス起動時に一度だけ読まれます。
 
 ---

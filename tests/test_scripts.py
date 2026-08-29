@@ -12,6 +12,7 @@
 """
 
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -278,3 +279,40 @@ def test_the_run_store_survives_a_rebuild() -> None:
     assert any(default.startswith(path) for path in mounted_at), (
         f"HYPO_WORKSPACE の既定 {default} が名前付きボリューム {mounted_at} の下にありません"
     )
+
+
+# ------------------------------------------- 使っていない方式のエラーを出さない
+# 実測: Docker を使っていないのに「Docker デーモンに接続できません」で止まった。
+# 常駐のさせ方が 3 通りあり、更新のたびにどれで動かしているかを思い出す必要が
+# あった。update.sh は動いているものを見て選ぶ。
+
+
+def test_update_does_not_fail_when_nothing_is_running(tmp_path):
+    """何も常駐していないなら、Docker のエラーではなく次の一手を出すこと。"""
+    empty = tmp_path / "bin"      # docker も systemctl も launchctl も無い PATH
+    empty.mkdir()
+    for tool in ("git", "curl", "sed", "seq", "sleep", "grep", "printf"):
+        src = shutil.which(tool)
+        if src:
+            (empty / tool).symlink_to(src)
+
+    proc = subprocess.run(  # noqa: S603
+        ["bash", str(ROOT / "scripts/update.sh"), "--no-pull"],
+        capture_output=True, text=True, timeout=120, cwd=ROOT,
+        env={"PATH": f"{empty}:/usr/bin:/bin", "HOME": str(tmp_path)},
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "常駐していません" in proc.stdout
+    assert "scripts/start.sh" in proc.stdout, "次の一手が無い"
+    assert "デーモンに接続できません" not in proc.stdout, "使っていない方式のエラーを出している"
+
+
+def test_update_help_does_not_touch_anything(tmp_path):
+    proc = subprocess.run(  # noqa: S603
+        ["bash", str(ROOT / "scripts/update.sh"), "--help"],
+        capture_output=True, text=True, timeout=30, cwd=ROOT,
+    )
+    assert proc.returncode == 0
+    assert "--no-pull" in proc.stdout
+    assert "常駐していません" not in proc.stdout, "--help なのに実行している"

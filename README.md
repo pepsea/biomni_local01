@@ -81,7 +81,7 @@ Docker + systemd で常設します。マシンを再起動しても自動で復
 | `make service-update` | `git pull` して入れ替え |
 | `make service-uninstall` | 取り外す（データは残る） |
 
-ポートを変えるには `.env` に `APP_PORT=9000` と書いて `make docker-rebuild`。
+ポートを変えるには `.env` に `APP_PORT=9000` と書いて `make update`。
 外部に出したくないなら `APP_BIND=127.0.0.1` も足します。
 
 > `.env` は git 管理外なので `git pull` では更新されません。設定の食い違いは
@@ -92,7 +92,7 @@ Docker + systemd で常設します。マシンを再起動しても自動で復
 
 ```bash
 bash scripts/set-provider.sh both --key sk-ant-... --port 8003
-make docker-rebuild        # Docker の場合。非 Docker なら bash scripts/start.sh
+make update                # 動いている形に合わせて入れ替える（Docker でも非 Docker でも）
 ```
 
 これで画面のモデル選択に「ローカル (Ollama)」と「クラウド (Claude API)」が並び、
@@ -185,7 +185,7 @@ bash scripts/start.sh --port 8004  # 別のポートで動かす
 ```bash
 make docker-check                    # 誰が使っているかまで出る
 bash scripts/set-provider.sh ollama  # ホストの Ollama を探して設定を合わせる
-make docker-rebuild
+make update
 ```
 
 詳細は [12-docker.md §12.10](docs/design/12-docker.md)。

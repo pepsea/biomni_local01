@@ -1,4 +1,4 @@
-.PHONY: help install install-min test lint notebook up api check-env doctor ollama-check app-check model-check models fetch check \
+.PHONY: help update install install-min test lint notebook up api check-env doctor ollama-check app-check model-check models fetch check \
 	docker-up docker-down docker-logs docker-ps docker-rebuild docker-check docker-stop-ollama \
 	local-install local-uninstall service-install service-status service-logs service-update service-uninstall
 
@@ -9,6 +9,7 @@ help:
 	@echo "lint         ruff"
 	@echo "notebook     JupyterLab を起動"
 	@echo "up           Web アプリを起動（環境確認つき）  ← いつもこれ"
+	@echo "update       git pull して、動いている形に合わせて再起動  ← 更新はこれ"
 	@echo "check-env    起動せず環境だけ確認"
 	@echo "doctor       どの Python を使っているか診断（依存が入らないとき）"
 	@echo "ollama-check Ollama に繋がらないときの切り分け"
@@ -56,6 +57,12 @@ notebook:
 
 up:
 	bash scripts/start.sh
+
+# 常駐のさせ方が 3 通りあり、どれで動かしているかで再起動の仕方が違う。
+# 使っていない方式のエラー（Docker デーモンに接続できません、など）を
+# 出さないよう、動いているものを見て選ぶ
+update:
+	bash scripts/update.sh
 
 check-env:
 	bash scripts/start.sh --check
