@@ -592,7 +592,12 @@ async function showResult(id) {
   $("tab-answer").innerHTML = `
     <h2>回答</h2>
     <div class="answer">${esc(r.answer) || '<span class="empty">回答が得られませんでした。</span>'}</div>
-    ${r.extra?.answer_is_unstructured ? '<div class="msg warning">⚠️ 構造化に失敗したため、エージェントの結論をそのまま表示しています。</div>' : ""}
+    ${r.extra?.answer_missing_reason
+        ? `<div class="msg warning">⚠️ ${esc(r.extra.answer_missing_reason)}</div>` : ""}
+    ${r.extra?.answer_is_unstructured
+        ? `<div class="msg warning">⚠️ 構造化されていないため、${
+            r.extra?.answer_from === "think" ? "エージェントの途中の記述" : "エージェントの結論"
+          }をそのまま表示しています。</div>` : ""}
     ${r.extra?.parsing_errors ? `<div class="msg warning">⚠️ モデルがタグ付きの応答を出せず、biomni が ${r.extra.parsing_errors} 回差し戻しました。${esc(r.extra.parsing_error_hint||"")}</div>` : ""}
     ${r.extra?.stopped_reason ? `<div class="msg warning">⚠️ ${esc(r.extra.stopped_reason)}</div>` : ""}
     ${planBlock(r.plan, r.plan_revisions)}

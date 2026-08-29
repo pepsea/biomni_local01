@@ -291,3 +291,76 @@ def test_a_salvageable_shape_produces_points(monkeypatch):
     )
     assert "reasoning_missing" not in r.extra
     assert [p.point for p in r.answer_reasoning] == ["BRCA1 の状態が効くか"]
+
+
+# ------------------------------------------ 回答が空のときに理由を必ず言う
+# 実測: 「回答が得られませんでした。論点がありません。」だけが表示された。
+# パイプラインは理由（例外・打ち切り・タグ無し・ステップ 0）を知っているのに
+# 画面に出していなかった。
+
+
+def _run_with_trace(monkeypatch, messages, *, extraction=None):
+    import json
+
+    import biomni_hypo.tracing as tracing
+
+    settings = Settings(offline_mode=True)
+    bundle = fake_bundle(messages, settings=settings)
+    payload = extraction if extraction is not None else {"answer": "", "hypotheses": []}
+    extractor = HypothesisExtractor(settings, llm=FakeLLM(json.dumps(payload, ensure_ascii=False)))
+    original = tracing.TracingRunner.__init__
+
+    def patched(self, b, run_id=None, *, guard_module=None):
+        original(self, b, run_id, guard_module=guard_module or FakeA1Module())
+
+    monkeypatch.setattr(tracing.TracingRunner, "__init__", patched)
+    return run_hypothesis(
+        QUESTION, settings=settings, bundle=bundle,
+        extractor=extractor, verifier=EvidenceVerifier(offline=True),
+    )
+
+
+NO_SOLUTION = [
+    "計画を立てます。まず BRCA1 の状態を確認します。",
+    "BRCA1 の変異と PARP 阻害剤感受性の関係を整理すると、相同組換え修復の"
+    "欠損が効いている可能性が高いと考えられます。ここまでで結論としては、"
+    "HRD の程度が耐性を規定する主因と見てよさそうです。",
+]
+
+
+def test_a_run_without_a_solution_salvages_the_prose(monkeypatch):
+    """<solution> が無くても、本文に結論があるなら見せること。"""
+    r = _run_with_trace(monkeypatch, NO_SOLUTION)
+
+    assert r.answer, "空白の回答を返している"
+    assert "HRD" in r.answer
+    assert r.extra["answer_is_unstructured"] is True
+    assert r.extra["answer_from"] == "think"
+
+
+def test_the_reason_is_always_recorded_when_the_answer_is_salvaged(monkeypatch):
+    r = _run_with_trace(monkeypatch, NO_SOLUTION)
+    reason = r.extra["answer_missing_reason"]
+    assert "solution" in reason, reason
+
+
+def test_the_report_carries_the_reason(monkeypatch):
+    r = _run_with_trace(monkeypatch, NO_SOLUTION)
+    md = to_markdown(r)
+    assert r.extra["answer_missing_reason"] in md
+
+
+def test_a_trace_with_no_usable_prose_still_says_why(monkeypatch):
+    """拾える本文も無い場合でも、理由だけは残すこと。"""
+    r = _run_with_trace(monkeypatch, ["はい。"])      # 短すぎて結論とみなさない
+
+    assert not r.answer
+    assert r.extra["answer_missing_reason"], "理由が空"
+    assert "solution" in r.extra["answer_missing_reason"]
+
+
+def test_a_normal_run_gets_no_missing_reason(result):
+    """普通に回答が出たランに、余計な警告を付けないこと。"""
+    assert result.answer
+    assert "answer_missing_reason" not in result.extra
+    assert "answer_from" not in result.extra

@@ -163,6 +163,20 @@ def run_hypothesis(
         result.answer = trace.solution_text
         result.extra["answer_is_unstructured"] = True
 
+    if not result.answer:
+        # <solution> が無い。多くはモデルがタグを出せていない場合で、
+        # そのときも本文（think）には結論らしきものが書かれている。
+        # 空白の画面を出すより、印を付けて見せるほうが役に立つ。
+        salvaged = _last_prose(trace.steps)
+        if salvaged:
+            result.answer = salvaged
+            result.extra["answer_is_unstructured"] = True
+            result.extra["answer_from"] = "think"
+
+    if not result.answer or result.extra.get("answer_from") == "think":
+        # 「回答が得られませんでした」だけでは打つ手が無い。分かっていることを言う。
+        result.extra["answer_missing_reason"] = _why_no_answer(result, trace, extraction)
+
     if not result.answer_reasoning and result.answer:
         # 結論はあるのに論点が無い＝biomni 既定の「短い答え」に戻っている状態
         # （docs/design/18 §18.1）。黙って結論だけ出さず、必ず旗を立てる。
@@ -188,6 +202,48 @@ def run_hypothesis(
     result.extra["duration_sec"] = round(time.monotonic() - t0, 1)
     emit("done", {"status": result.status, "duration_sec": result.extra["duration_sec"]})
     return result
+
+
+#: think から結論を拾うときの最低の長さ。これ未満は相槌とみなす
+_MIN_PROSE = 40
+
+
+def _last_prose(steps: list[Step]) -> str:
+    """<solution> が無いときに、最後のまとまった本文を拾う。
+
+    モデルがタグを出せないだけで、本文には結論が書かれていることが多い。
+    """
+    for step in reversed(steps):
+        if step.kind is not StepKind.THINK:
+            continue
+        text = (step.text or "").strip()
+        if len(text) >= _MIN_PROSE:
+            return text[:4000]
+    return ""
+
+
+def _why_no_answer(result: RunResult, trace: Any, extraction: Any) -> str:
+    """回答が無い／タグ無しになった理由を、分かっている事実から書く。
+
+    「回答が得られませんでした」だけを出していたので、利用者にも
+    こちらにも次の一手が無かった（docs/design/31）。
+    """
+    if result.error:
+        return f"探索が例外で止まりました（{result.error}）"
+    if not trace.steps:
+        return "エージェントが 1 ステップも実行できませんでした"
+    if trace.stopped_reason:
+        return trace.stopped_reason
+    if trace.parsing_errors:
+        return (
+            f"モデルが <solution> を出せませんでした"
+            f"（タグの無い応答を {trace.parsing_errors} 回差し戻し）。{PARSE_ERROR_HINT}"
+        )
+    if not trace.solution_text:
+        return f"エージェントが {len(trace.steps)} ステップ動きましたが <solution> を出さずに終わりました"
+    if getattr(extraction, "parse_error", ""):
+        return f"抽出応答を読めませんでした（{extraction.parse_error}）"
+    return "抽出モデルが answer を返しませんでした"
 
 
 def collect_resources(steps: Iterable[Step], policy: ResourcePolicy) -> list[Resource]:

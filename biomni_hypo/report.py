@@ -153,7 +153,11 @@ def _answer_section(r: RunResult) -> str:
     """質問への回答。根拠付きで、いちばん上に出す。"""
     if not r.answer:
         return ""
-    lines = ["## 回答", "", r.answer, ""]
+    lines = ["## 回答", "", r.answer or "（回答が得られませんでした）", ""]
+    # 空の回答をそのまま載せない。分かっている理由を必ず添える
+    why = (r.extra or {}).get("answer_missing_reason", "")
+    if why:
+        lines += [f"> ⚠️ {why}", ""]
     if r.extra.get("answer_is_unstructured"):
         lines.append("> ⚠️ 構造化に失敗したため、エージェントの結論をそのまま載せています。")
         lines.append("")
