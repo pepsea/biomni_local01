@@ -13,6 +13,7 @@ import logging
 import multiprocessing as mp
 import os
 import signal
+import time
 import traceback
 from typing import Any
 
@@ -73,24 +74,60 @@ def spawn(run_id: str, question_spec: dict[str, Any], settings_dict: dict[str, A
     return proc, queue
 
 
+def _own_group(pid: int, wait: float = 2.0) -> int | None:
+    """子が自分と同じプロセスグループに居ない場合だけ、そのグループ ID を返す。
+
+    子は run_in_subprocess の先頭で os.setsid() を呼ぶが、それが効くのは
+    spawn した Python が起動し切ってから。start() 直後の数百 ms〜数秒（遅い
+    ファイルシステムではもっと長い）は、子はまだ親と同じグループに居る。
+    そこで killpg すると **親が自分自身を撃つ**。
+
+    実測した壊れ方: pytest 実行中にランの後始末が走り、pytest ごと SIGTERM
+    されて出力が丸ごと消え、シェルには `Terminated` だけが残る。
+    Web アプリでは「停止」を押した瞬間にサーバごと落ちる。
+
+    なので、分かれるまで少し待ち、それでも同じならグループは撃たない。
+    """
+    if not (hasattr(os, "killpg") and hasattr(os, "getpgid")) or not pid:
+        return None
+    mine = os.getpgid(0)
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            pgid = os.getpgid(pid)
+        except (ProcessLookupError, PermissionError, OSError) as exc:
+            log.debug("子のプロセスグループを取れません: %s", exc)
+            return None
+        if pgid != mine:
+            return pgid
+        if time.monotonic() >= deadline:
+            log.warning(
+                "子 pid=%s がまだ自分と同じプロセスグループ (%s) です。"
+                "グループごとの停止は諦めます（自分を撃たないため）", pid, mine
+            )
+            return None
+        time.sleep(0.05)
+
+
 def terminate_tree(proc: Any, grace: float = 5.0) -> None:
     """子プロセスを、その孫ごと止める。
 
     proc.terminate() は直接の子にしか届かない。biomni は run_bash_script などで
     さらに別プロセスを起こすので、プロセスグループごと落とす必要がある。
+    ただし撃つのは「子が自分で作ったグループ」だけ（_own_group を見ること）。
     """
     if proc is None or not proc.is_alive():
         return
 
     pid = proc.pid
-    killed_group = False
-    if hasattr(os, "killpg") and pid:
+    pgid = _own_group(pid)
+    if pgid is not None:
         try:
-            os.killpg(os.getpgid(pid), signal.SIGTERM)
-            killed_group = True
+            os.killpg(pgid, signal.SIGTERM)
         except (ProcessLookupError, PermissionError, OSError) as exc:
             log.debug("プロセスグループへの SIGTERM に失敗: %s", exc)
-    if not killed_group:
+            pgid = None
+    if pgid is None:
         proc.terminate()
 
     proc.join(timeout=grace)
@@ -99,9 +136,9 @@ def terminate_tree(proc: Any, grace: float = 5.0) -> None:
 
     # 落ちなければ SIGKILL
     log.warning("SIGTERM で終了しませんでした。SIGKILL します: pid=%s", pid)
-    if hasattr(os, "killpg") and pid:
+    if pgid is not None:
         try:
-            os.killpg(os.getpgid(pid), signal.SIGKILL)
+            os.killpg(pgid, signal.SIGKILL)
         except (ProcessLookupError, PermissionError, OSError):
             pass
     proc.kill()

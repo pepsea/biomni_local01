@@ -67,7 +67,37 @@ say "設定ファイル"
 if [[ -f .env ]]; then ok ".env（既存のものを使用）"; else cp .env.example .env; ok ".env を作成"; fi
 
 say "テスト"
-if pytest -q 2>&1 | tail -3; then ok "pytest"; else ng "pytest が失敗しました"; exit 1; fi
+# `pytest -q | tail -3` と書くと、pytest がシグナルで殺されたときに
+# 何も分からなくなる。パイプのバッファごと出力が消え、シェルには
+# `Terminated` の 1 行だけが残る（実測で踏んだ）。
+# ログに残し、終了コードからシグナルを名前で報告する。
+LOG="logs/pytest.log"
+mkdir -p logs
+set +e
+pytest -q > "$LOG" 2>&1
+RC=$?
+set -e
+
+if [[ $RC -eq 0 ]]; then
+  tail -1 "$LOG"
+  ok "pytest"
+elif [[ $RC -gt 128 ]]; then
+  SIG=$((RC - 128))
+  NAME=$(kill -l "$SIG" 2>/dev/null || echo "signal ${SIG}")
+  ng "pytest が SIG${NAME} で殺されました（テストの失敗ではありません）"
+  echo "      止まった場所（${LOG} の末尾）:"
+  tail -15 "$LOG" | sed 's/^/        /'
+  echo
+  echo "      よくある原因:"
+  echo "        SIGKILL(9)  メモリ不足。dmesg -T | tail や journalctl -k | tail で確認"
+  echo "        SIGTERM(15) 誰かがプロセスグループごと止めている。"
+  echo "                    タイムアウト付きの実行や、常駐サービスの停止処理を確認"
+  exit 1
+else
+  tail -20 "$LOG"
+  ng "pytest が失敗しました（全文: ${LOG}）"
+  exit 1
+fi
 
 if [[ $FULL -eq 1 ]]; then
   say "Ollama"

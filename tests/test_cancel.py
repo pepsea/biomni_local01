@@ -87,3 +87,41 @@ def test_terminate_tree_is_safe_on_a_dead_process():
     proc.join(timeout=10)
     terminate_tree(proc)          # 例外を出さないこと
     terminate_tree(None)          # None も許容する
+
+
+def _plain_child() -> None:
+    """setsid を呼ばない子。start() 直後の子はしばらくこの状態にある。"""
+    time.sleep(300)
+
+
+@pytest.mark.skipif(not hasattr(os, "killpg"), reason="POSIX 以外ではプロセスグループを使えない")
+def test_terminate_tree_never_signals_our_own_process_group():
+    """子がまだ親と同じプロセスグループに居るとき、自分を撃たないこと。
+
+    実測した壊れ方: 子は run_in_subprocess の先頭で setsid するが、spawn した
+    Python が起動し切るまでの数秒はまだ親と同じグループに居る。その間に
+    killpg すると親ごと死ぬ。pytest ではシェルに `Terminated` だけが残り、
+    出力はパイプのバッファごと消える。Web アプリでは「停止」でサーバが落ちる。
+    """
+    import signal as signal_mod
+
+    received: list[int] = []
+    previous = signal_mod.signal(signal_mod.SIGTERM, lambda *_: received.append(1))
+    ctx = mp.get_context("spawn")
+    proc = ctx.Process(target=_plain_child, daemon=True)
+    proc.start()
+    try:
+        for _ in range(200):      # 子が同じグループに居るうちに撃ちたい
+            if proc.is_alive() and os.getpgid(proc.pid) == os.getpgid(0):
+                break
+            time.sleep(0.05)
+
+        terminate_tree(proc, grace=5.0)
+
+        assert not received, "自分のプロセスグループに SIGTERM を撃っている"
+        assert not proc.is_alive(), "グループを撃てない場合でも子は止めること"
+    finally:
+        signal_mod.signal(signal_mod.SIGTERM, previous)
+        if proc.is_alive():
+            proc.kill()
+            proc.join(timeout=5)
