@@ -444,3 +444,54 @@ def test_an_unwritable_data_lake_is_named(tmp_path, capsys):
     assert "データレイクを作れません" in err
     assert "BIOMNI_PATH" in err
     assert "ネットワーク" not in err, "見当違いの案内をしている"
+
+
+# ------------------------------------------- 「作れません」で終わらせない
+# 実測: 「データレイクを作れません」だけでは打つ手が無い。権限・読み取り専用・
+# 容量・親が無い、で対処が違う。その場で調べて、書ける場所まで示す。
+
+
+def test_a_read_only_mount_is_named(tmp_path):
+    module = _fetch_module()
+    mounts = tmp_path / "mounts"
+    mounts.write_text(
+        "/dev/sda1 / ext4 rw,relatime 0 0\n"
+        "server:/vol /mnt/storage nfs4 ro,relatime 0 0\n",
+        encoding="utf-8",
+    )
+    assert module._is_read_only(Path("/mnt/storage/users/x"), mounts) is True
+    assert module._is_read_only(Path("/home/x"), mounts) is False
+
+
+def test_the_nearest_existing_parent_is_reported(tmp_path):
+    module = _fetch_module()
+    deep = tmp_path / "a" / "b" / "c"
+    assert module._existing_ancestor(deep) == tmp_path
+
+
+def test_a_writable_place_is_actually_verified(tmp_path, monkeypatch):
+    """提案する場所は、実際に書けると確かめたものにすること。"""
+    module = _fetch_module()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    found = module._writable_candidate()
+
+    assert found == str(tmp_path / "biomni-data")
+    assert Path(found).is_dir()
+    assert not list(Path(found).glob(".probe")), "試した跡を残さないこと"
+
+
+def test_the_failure_names_a_place_to_use(tmp_path, monkeypatch, capsys):
+    """作れないときは、代わりに使える場所まで出すこと。"""
+    import os
+
+    module = _fetch_module()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("HYPO_SKIP_DOTENV", "1")
+    monkeypatch.setenv("BIOMNI_PATH", "/proc/nowhere")
+    rc = module.main(["--only", "gwas_catalog.pkl"])
+    err = capsys.readouterr().err
+
+    assert rc == 1
+    assert "実在する一番近い親" in err
+    assert f"BIOMNI_PATH={tmp_path / 'biomni-data'}" in err, err
+    assert os.access(tmp_path / "biomni-data", os.W_OK)
