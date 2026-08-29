@@ -527,6 +527,8 @@ function listen(id) {
     $("status").innerHTML = `<div class="msg info">${esc({building_agent:"エージェント準備中",exploring:"調査中",extracting:"回答を組み立て中",verifying:"根拠を検証中"}[p] || p)}</div>`;
   });
   es.addEventListener("input_hints", ev => renderHints(JSON.parse(ev.data).hints));
+  // 子プロセスが例外で落ちたとき。拾わないと「failed · 0 ステップ」だけになる
+  es.addEventListener("run_error", ev => showRunError(JSON.parse(ev.data)));
   es.addEventListener("done", async () => { await showResult(id); finish(); });
 
   // EventSource は接続が切れると自分で繋ぎ直す。onerror はその途中でも呼ばれる。
@@ -573,6 +575,21 @@ async function reconcile(id) {
   finish();
 }
 
+// ランが例外で落ちたときは、型・メッセージ・traceback をそのまま出す。
+// 「failed · 0 ステップ · - 秒」だけでは、環境の違い（Linux では落ちるが
+// mac では動く、など）を調べる手掛かりが何も残らない（実測で踏んだ）。
+function showRunError(payload) {
+  if (!payload || !payload.error) return;
+  let box = $("runError");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "runError"; box.className = "msg error";
+    $("status").appendChild(box);
+  }
+  box.textContent = `❌ ${payload.error}`
+    + (payload.traceback ? `\n\n${payload.traceback}` : "");
+}
+
 // モデルが <execute>/<solution> を出せていないときの警告。ステップ一覧に紛れると
 // 見落とすので、状態欄に固定で出す。
 function showParseWarning(text) {
@@ -589,6 +606,8 @@ async function showResult(id) {
   $("status").innerHTML = `<div class="msg ${r.status==='succeeded'?'info':'error'}">${esc(r.status)} · ${r.steps.length} ステップ · ${r.extra?.duration_sec ?? "-"} 秒</div>`;
 
   // --- 回答 ---
+  if (r.error) showRunError({error: r.error, traceback: r.extra?.error_traceback});
+
   $("tab-answer").innerHTML = `
     <h2>回答</h2>
     <div class="answer">${esc(r.answer) || '<span class="empty">回答が得られませんでした。</span>'}</div>

@@ -325,6 +325,23 @@ async def _publish(run_id: str, kind: str, payload: dict[str, Any]) -> None:
         q.put_nowait(event)
 
 
+def _record_worker_error(run_id: str, payload: dict[str, Any]) -> None:
+    """子プロセスの例外を保存する。traceback も含めて残すこと。
+
+    残さないと、ランを開き直したときに理由が消える。ラン中は SSE で
+    届くが、後から履歴で見たときに何も無いのでは調べようがない。
+    """
+    run = store().get(run_id)
+    if run is None:
+        return
+    run.error = str(payload.get("error", "")) or run.error
+    trace = str(payload.get("traceback", ""))
+    if trace:
+        run.extra["error_traceback"] = trace[-4000:]
+    store().save(run)
+    log.error("ワーカーが例外で終了しました: %s\n%s", run.error, trace)
+
+
 async def _drain(run_id: str, proc: Any, mp_queue: Any) -> None:
     """子プロセスの multiprocessing.Queue を asyncio 側へ吸い上げる。
 
@@ -352,6 +369,13 @@ async def _drain(run_id: str, proc: Any, mp_queue: Any) -> None:
                 store().save(run)
                 await _publish(run_id, "result", {"run_id": run_id, "status": run.status})
             else:
+                if kind == "error":
+                    # 子プロセスが投げた例外。ここで残さないと、画面には
+                    # 「failed · 0 ステップ · - 秒」しか出ない（実測で踏んだ）
+                    _record_worker_error(run_id, msg["payload"])
+                    # SSE の "error" はブラウザの予約名で、接続エラーの
+                    # ハンドラに配られてしまう。別名で送ること
+                    kind = "run_error"
                 await _publish(run_id, kind, msg["payload"])
     finally:
         terminate_tree(proc, grace=5.0)
@@ -360,7 +384,10 @@ async def _drain(run_id: str, proc: Any, mp_queue: Any) -> None:
         if run and run.status == "running":
             run.status = "cancelled" if cancelled else "failed"
             if not cancelled:
-                run.error = run.error or "ワーカーが結果を返さずに終了しました"
+                run.error = run.error or (
+                    "ワーカーが結果を返さずに終了しました"
+                    "（メモリ不足で OS に強制終了された場合もここに来ます）"
+                )
             run.finished_at = datetime.now(UTC)
             store().save(run)
         await _publish(run_id, "done", {"status": run.status if run else "failed"})

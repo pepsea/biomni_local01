@@ -646,3 +646,36 @@ def test_a_temporary_place_is_marked_as_such(tmp_path, monkeypatch):
 
     main.store()
     assert main._STORE_FALLBACK["temporary"] is True
+
+
+# ------------------------------------------- ワーカーが例外で落ちたときの表示
+# 実測: Linux で「failed · 0 ステップ · - 秒」とだけ出て、mac では動く。
+# 子プロセスは traceback 付きの error イベントを送っていたのに、
+# 保存もされず、画面にも出ていなかった。
+
+
+def test_a_worker_crash_is_stored_with_its_traceback(client):
+    from biomni_hypo.schemas import RunResult
+
+    main.store().save(RunResult(id="r_boom", question="q", status="running"))
+    main._record_worker_error("r_boom", {
+        "error": "ImportError: No module named 'xyz'",
+        "traceback": "Traceback (most recent call last):\n  ...\nImportError: ...",
+    })
+
+    run = main.store().get("r_boom")
+    assert run.error == "ImportError: No module named 'xyz'"
+    assert "Traceback" in run.extra["error_traceback"]
+
+
+def test_the_sse_event_is_not_called_error(client):
+    """SSE の "error" はブラウザの予約名。接続エラーのハンドラに配られる。
+
+    ここを "error" のまま送ると、ワーカーの例外が届くたびに
+    EventSource の onerror が呼ばれ、ストリームが閉じる。
+    """
+    source = (Path(main.__file__)).read_text(encoding="utf-8")
+    assert '"run_error"' in source
+    drain = source[source.index("async def _drain(") :]
+    drain = drain[: drain.index("\ndef ", 1)] if "\ndef " in drain[1:] else drain
+    assert 'kind = "run_error"' in drain, "予約名のまま publish している"
