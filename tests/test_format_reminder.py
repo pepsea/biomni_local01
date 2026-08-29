@@ -213,3 +213,58 @@ def test_the_setting_reaches_the_wrapper():
     settings.min_exploration_steps = 7
     llm, _handler = build_agent_llm(settings)
     assert llm._min_steps == 7
+
+
+# ------------------------------------------- 「そんな引数は無い」の言い直し
+# 実測: query_reactome(max_result=...) で毎回 1 ステップを捨てていた。
+# biomni のツールは名前が似ていて引数が揃っていないので、モデルは
+# max_result を持つツールの書き方を、持たないツールにも当てる。
+
+
+def test_a_bad_keyword_is_turned_into_the_real_signature():
+    from biomni_hypo.llm import _signature_hint
+
+    hint = _signature_hint(
+        "TypeError: query_reactome() got an unexpected keyword argument 'max_result'"
+    )
+    assert "`query_reactome` has no parameter `max_result`" in hint
+    assert "prompt" in hint and "endpoint" in hint, hint
+    assert "Do not guess parameter names" in hint
+
+
+def test_an_ordinary_observation_gets_no_hint():
+    from biomni_hypo.llm import _signature_hint
+
+    assert _signature_hint("BRCA1 の変異が 12 件見つかりました") == ""
+    assert _signature_hint("") == ""
+
+
+def test_an_unknown_function_gets_no_hint():
+    """署名を引けないものに、当てずっぽうの助言をしないこと。"""
+    from biomni_hypo.llm import _signature_hint
+
+    assert _signature_hint("nosuchtool() got an unexpected keyword argument 'x'") == ""
+
+
+def test_the_hint_reaches_the_model():
+    """観測に付いた助言が、実際に渡す messages に入ること。"""
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    from biomni_hypo.llm import FormatReminderLLM
+
+    seen = {}
+
+    class Inner:
+        def invoke(self, messages, *a, **k):
+            seen["messages"] = messages
+            return AIMessage(content="ok")
+
+    llm = FormatReminderLLM(Inner())
+    llm.invoke([
+        AIMessage(content="<execute>query_reactome(max_result=5)</execute>"),
+        HumanMessage(content="TypeError: query_reactome() got an unexpected keyword argument 'max_result'"),
+    ])
+
+    text = seen["messages"][-1].content
+    assert "has no parameter `max_result`" in text
+    assert "prompt" in text

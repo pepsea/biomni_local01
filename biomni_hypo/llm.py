@@ -10,6 +10,7 @@ LLM の構築は必ずこのモジュールを通す。
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -310,6 +311,63 @@ SHALLOW_NUDGE = (
 )
 
 
+#: `f() got an unexpected keyword argument 'x'` を拾う。
+#: biomni のツールは名前が似ていて引数が揃っていない（max_result を持つものと
+#: 持たないものがある）ので、モデルは持っていない側にも付けてしまう。
+#: 実測: query_reactome(max_result=...) で毎回 1 ステップを捨てていた。
+_BAD_KWARG = re.compile(
+    r"(\w+)\(\) got an unexpected keyword argument ['\"](\w+)['\"]"
+)
+
+#: 実際の引数を並べて言い直させる。抽象的に「引数を確認せよ」では効かない
+SIGNATURE_NUDGE = (
+    "[tool] `{func}` has no parameter `{bad}`. Its parameters are: {params}. "
+    "Call `{func}` again with only those parameters. Do not guess parameter names."
+)
+
+
+def _signature_hint(text: str) -> str:
+    """観測に出た「そんな引数は無い」を、正しい引数の並びに変えて返す。"""
+    match = _BAD_KWARG.search(text or "")
+    if not match:
+        return ""
+    func, bad = match.group(1), match.group(2)
+    params = _tool_parameters(func)
+    if not params:
+        return ""
+    return SIGNATURE_NUDGE.format(func=func, bad=bad, params=", ".join(params))
+
+
+def _tool_parameters(name: str) -> list[str]:
+    """biomni のツールの実際の引数名。見つからなければ空。
+
+    実物の署名を見ること。スキーマ（module2api）は正しいことも多いが、
+    最終的に呼ばれるのは関数なので、食い違ったら関数が正しい。
+    """
+    try:
+        import importlib
+        import inspect
+
+        from biomni.utils import read_module2api
+    except ImportError:  # pragma: no cover - biomni が無い環境
+        return []
+    try:
+        for module_name, apis in (read_module2api() or {}).items():
+            if not any(a.get("name") == name for a in apis):
+                continue
+            func = getattr(importlib.import_module(module_name), name, None)
+            if func is None:
+                continue
+            return [
+                p.name
+                for p in inspect.signature(func).parameters.values()
+                if p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)
+            ]
+    except Exception:  # noqa: BLE001 - 助言のための処理で落とさない
+        return []
+    return []
+
+
 class FormatReminderLLM:
     """invoke のたびに、会話の最後尾へ出力形式の念押しを差し込む薄い包み。
 
@@ -343,6 +401,12 @@ class FormatReminderLLM:
     def _text_to_append(self, messages: list[Any]) -> str:
         """このターンで足す文。形式の念押し + 必要なら深さの押し戻し。"""
         text = self._reminder
+        # 直前の観測が「そんな引数は無い」なら、正しい引数を添える。
+        # 放っておくと同じ呼び方を繰り返して、ステップを捨て続ける
+        last = messages[-1] if messages else None
+        hint = _signature_hint(getattr(last, "content", "") or "")
+        if hint:
+            text += "\n" + hint
         if self._min_steps:
             done = sum(
                 1
