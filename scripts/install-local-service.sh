@@ -66,6 +66,36 @@ ok "OLLAMA_BASE_URL=${OLLAMA_URL:-（未設定。既定の localhost:11434 を�
 mkdir -p "$REPO/logs" "$REPO/data" "$REPO/workspace"
 LOG="$REPO/logs/app.log"
 
+# ---------------------------------------------------------------- 保存先
+# 常駐させると、保存先が開けない状態は「毎回警告が出る」になる。設置の時点で
+# 実際に sqlite を開いて書いてみて、駄目ならローカルディスクに寄せ、その値を
+# unit に焼き込む。リポジトリがネットワークマウント上にあると開けない
+# （docs/design/27）。開くだけでなく書くこと。NFS は COMMIT で落ちる。
+probe_workspace() {
+  "$PY" -c 'import sys; from backend.app.store import probe_workspace; sys.stdout.write(probe_workspace(sys.argv[1]))' "$1"
+}
+
+WORKSPACE=$(sed -n 's/^HYPO_WORKSPACE=//p' .env | head -1)
+WORKSPACE="${WORKSPACE:-$REPO/workspace}"
+WHY=$(probe_workspace "${WORKSPACE}")
+if [[ -z "$WHY" ]]; then
+  ok "保存先: ${WORKSPACE}"
+else
+  STATE="${XDG_STATE_HOME:-$HOME/.local/state}/biomni-hypo/workspace"
+  warn "保存先 ${WORKSPACE} は使えません"
+  echo "      ${WHY}"
+  WHY2=$(probe_workspace "${STATE}")
+  if [[ -z "$WHY2" ]]; then
+    WORKSPACE="$STATE"
+    ok "保存先: ${WORKSPACE}（ローカルディスクに寄せました）"
+  else
+    ng "保存先をどこにも作れません"
+    echo "      ${STATE}: ${WHY2}"
+    echo "      .env の HYPO_WORKSPACE に書ける場所を指定してください。"
+    exit 1
+  fi
+fi
+
 case "$(uname -s)" in
   Darwin) OS=macos ;;
   Linux)  OS=linux ;;
@@ -92,6 +122,10 @@ if [[ "$OS" == macos ]]; then
     <string>--port</string><string>${PORT}</string>
   </array>
   <key>WorkingDirectory</key><string>${REPO}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HYPO_WORKSPACE</key><string>${WORKSPACE}</string>
+  </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>StandardOutPath</key><string>${LOG}</string>
@@ -131,6 +165,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=${REPO}
+Environment=HYPO_WORKSPACE=${WORKSPACE}
 ExecStart=${PY} -m uvicorn backend.app.main:app --host ${BIND} --port ${PORT}
 Restart=always
 RestartSec=5

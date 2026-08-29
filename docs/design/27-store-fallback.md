@@ -67,3 +67,40 @@ HTTP 202
 
 **保存先の既定値をリポジトリの中に置くと、リポジトリの置き場所の制約を
 そのまま引き継ぎます。** 動く場所に逃がす道を用意しておくこと。
+
+---
+
+## 常駐させる場合は設置時に決める
+
+逃がす仕組みは「動き続ける」ためのものですが、常駐させると
+**毎回同じ警告が出続ける**ことになります。警告が常態になると読まれません。
+
+`scripts/install-local-service.sh` が、設置の時点で保存先を決めるようにしました。
+
+1. `.env` の `HYPO_WORKSPACE`（既定はリポジトリ直下）で実際に sqlite を
+   開いて**書いてみる**。開くだけでは足りません。NFS は開けても COMMIT で
+   落ちます（`probe_workspace()`）。
+2. 駄目なら `$XDG_STATE_HOME/biomni-hypo/workspace` を同じやり方で試す。
+3. 決まった値を unit / plist に焼き込む。
+
+```ini
+[Service]
+WorkingDirectory=/mnt/…/biomni_local01
+Environment=HYPO_WORKSPACE=/home/…/.local/state/biomni-hypo/workspace
+ExecStart=…/python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 5002
+```
+
+設置時の出力:
+
+```
+  ! 保存先 /mnt/…/workspace は使えません
+      保存先のディレクトリを作れません: …
+  ✓ 保存先: /home/…/.local/state/biomni-hypo/workspace（ローカルディスクに寄せました）
+```
+
+この unit で起動すると `/api/health` の `store.fallback` は `null` になり、
+画面の警告も出ません。逃げ道は残したまま、常態としては出ないようにします。
+
+`_fallback_workspace()` は `HOME` が無くても決まるようにしました。
+systemd のシステムユニット（`sudo systemctl`）では `HOME` が無いことがあり、
+`Path.home()` はそこで `RuntimeError` を投げます。

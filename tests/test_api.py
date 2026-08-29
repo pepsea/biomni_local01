@@ -581,3 +581,26 @@ def test_a_reachable_url_is_left_alone(client_with_ollama):
 
     assert body["base_url"] == mock.base_url
     assert body["fallback"] is None
+
+
+def test_probe_workspace_accepts_a_writable_place(tmp_path):
+    from backend.app.store import probe_workspace
+
+    assert probe_workspace(tmp_path) == ""
+    assert not list(tmp_path.glob(".probe*")), "試した跡を残さないこと"
+
+
+def test_probe_workspace_reports_why_it_cannot(tmp_path):
+    from backend.app.store import probe_workspace
+
+    why = probe_workspace("/proc/nowhere")
+    assert why, "使えない場所を使えると言っている"
+    assert "/proc/nowhere" in why
+
+
+def test_fallback_workspace_without_home(monkeypatch):
+    """HOME の無い環境（systemd のシステムユニットなど）でも決まること。"""
+    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
+    monkeypatch.delenv("HOME", raising=False)
+    path = main._fallback_workspace()
+    assert path.is_absolute(), f"絶対パスになっていない: {path}"

@@ -73,6 +73,29 @@ class StoreUnavailable(RuntimeError):
     """
 
 
+def probe_workspace(path: str | Path) -> str:
+    """その場所に保存できるかを実際に試す。使えるなら空文字、駄目なら理由を返す。
+
+    開けるかどうかだけでは足りない。NFS などロックの効かない場所は、
+    開けても COMMIT で落ちる。だから書き込みまでやってみること。
+
+    常駐させるときに使う。設置時に分かれば、毎回警告を出さずに済む。
+    """
+    probe = Path(path) / ".probe.sqlite3"
+    try:
+        store = RunStore(probe)
+        with store._connect() as conn:
+            conn.execute("CREATE TABLE IF NOT EXISTS probe (x INTEGER)")
+            conn.execute("INSERT INTO probe VALUES (1)")
+    except StoreUnavailable as exc:
+        return str(exc).splitlines()[0]
+    except Exception as exc:  # noqa: BLE001 - 理由は文字列にして返すのが仕事
+        return f"{type(exc).__name__}: {exc}"
+    finally:
+        probe.unlink(missing_ok=True)
+    return ""
+
+
 class RunStore:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)

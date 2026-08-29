@@ -13,6 +13,7 @@ import logging
 import os
 import queue as queue_mod
 import subprocess
+import tempfile
 import traceback
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -120,7 +121,12 @@ def _fallback_workspace() -> Path:
     効かないファイルシステムでは開けず、"unable to open database file"
     としか言わない（実測で踏んだ: /mnt/... に clone した環境）。
     """
-    base = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
+    # systemd のシステムユニットなど HOME が無い環境でも決まるようにする。
+    # Path.home() は HOME が無いと RuntimeError を投げる
+    base = os.environ.get("XDG_STATE_HOME")
+    if not base:
+        home = os.environ.get("HOME") or os.path.expanduser("~")
+        base = str(Path(home) / ".local" / "state") if home.startswith("/") else tempfile.gettempdir()
     return Path(base) / "biomni-hypo" / "workspace"
 
 
