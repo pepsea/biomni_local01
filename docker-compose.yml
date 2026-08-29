@@ -41,7 +41,13 @@ services:
       # 既定はホストの Ollama。.env にあればそちらを使う（docs/design/17）
       OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://host.docker.internal:11434}"
       BIOMNI_PATH: /app/data
-      HYPO_WORKSPACE: /app/workspace
+      # ラン履歴（sqlite）は名前付きボリュームに置く。
+      # ./workspace は bind マウントなので、リポジトリがネットワークマウントの
+      # 上にあると sqlite を開けない（ロックが効かない）。ホスト側の置き場所の
+      # 制約をコンテナが引き継いでしまう（docs/design/27）。
+      # 名前付きボリュームは Docker のローカルストレージなので、その制約が無く、
+      # 再ビルドでも消えない。.env で上書きもできる。
+      HYPO_WORKSPACE: "${HYPO_WORKSPACE:-/app/state}"
       HYPO_POLICY_PATH: /app/config/resource_policy.yaml
       HYPO_PROVIDER: "${HYPO_PROVIDER:-ollama}"
       HYPO_MODEL: "${HYPO_MODEL:-qwen3:14b}"
@@ -62,7 +68,8 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./data:/app/data                       # データレイク（再取得を避ける）
-      - ./workspace:/app/workspace             # ラン履歴・レポート
+      - ./workspace:/app/workspace             # 生成物を手元から見たい場合の置き場
+      - hypo-state:/app/state                  # ラン履歴（sqlite）。ローカルストレージ
       - ./config:/app/config:ro                # リソースポリシー
     # LLM 生成コードを実行するので権限を絞る
     security_opt:
@@ -81,3 +88,6 @@ services:
     logging:
       driver: json-file
       options: {max-size: "10m", max-file: "5"}
+
+volumes:
+  hypo-state:

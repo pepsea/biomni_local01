@@ -238,3 +238,43 @@ def test_the_default_port_is_the_same_everywhere() -> None:
     assert len(set(found.values())) == 1, "既定ポートが食い違っています:\n  " + "\n  ".join(
         f"{k}: {v}" for k, v in found.items()
     )
+
+
+# ------------------------------------------------- Docker のラン履歴の置き場
+# 実測: 画面に「/app/workspace/runs.sqlite3 を開けません」と出た。
+# /app/workspace は ./workspace の bind マウント。リポジトリがネットワーク
+# マウントの上にあると sqlite を開けないので、ホスト側の置き場所の制約を
+# コンテナがそのまま引き継いでしまう。
+
+
+def _compose() -> dict:
+    yaml = pytest.importorskip("yaml", reason="PyYAML が無い環境ではスキップ")
+    return yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+
+
+def test_the_run_store_is_not_on_a_bind_mount() -> None:
+    """sqlite の置き場は bind マウントの下にしないこと。"""
+    app = _compose()["services"]["app"]
+    workspace = app["environment"]["HYPO_WORKSPACE"]
+    default = workspace.split(":-", 1)[1].rstrip("}") if ":-" in workspace else workspace
+
+    binds = [m.split(":")[1] for m in app["volumes"] if m.startswith(".")]
+    for bind in binds:
+        assert not default.startswith(bind), (
+            f"HYPO_WORKSPACE の既定 {default} が bind マウント {bind} の下にあります。"
+            "リポジトリの置き場所の制約をコンテナが引き継ぎます"
+        )
+
+
+def test_the_run_store_survives_a_rebuild() -> None:
+    """名前付きボリュームに載せること（再ビルドで履歴が消えないように）。"""
+    compose = _compose()
+    app = compose["services"]["app"]
+    workspace = app["environment"]["HYPO_WORKSPACE"]
+    default = workspace.split(":-", 1)[1].rstrip("}") if ":-" in workspace else workspace
+
+    named = {m.split(":")[0]: m.split(":")[1] for m in app["volumes"] if not m.startswith(".")}
+    mounted_at = [path for name, path in named.items() if name in (compose.get("volumes") or {})]
+    assert any(default.startswith(path) for path in mounted_at), (
+        f"HYPO_WORKSPACE の既定 {default} が名前付きボリューム {mounted_at} の下にありません"
+    )
