@@ -142,3 +142,21 @@ def test_an_empty_ollama_is_explained_separately(html):
     assert "モデルが 1 件もありません" in html
     assert "別の Ollama を見ています" in html
     assert "make model-check" in html
+
+
+def test_boot_notices_do_not_overwrite_each_other(html):
+    """起動時の通知は追記すること。
+
+    実測: renderHints は #hints の中身を置き換える。boot() は保存先・Ollama
+    接続先・モデルの 3 系統から通知を出すので、置き換えで呼ぶと後のものが
+    前のものを消す。保存先の警告がモデルの警告に上書きされて消えていた。
+    """
+    start = html.index("async function boot()")
+    body = html[start : html.index("\n}", start)]
+
+    assert "appendHints(" in body, "boot() が追記系を使っていない"
+    assert "renderHints(" not in body, (
+        "boot() の中で renderHints を呼ぶと、先に出した通知が消えます。"
+        "appendHints を使ってください"
+    )
+    assert "innerHTML = lines" not in body, "モデルの通知も追記にすること（+= を使う）"

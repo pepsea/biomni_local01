@@ -130,40 +130,53 @@ def _fallback_workspace() -> Path:
     return Path(base) / "biomni-hypo" / "workspace"
 
 
+def _temporary_workspace() -> Path:
+    """最後の逃げ先。再起動で消えるが、消えないより動くほうがまし。"""
+    try:
+        who = os.getuid()
+    except AttributeError:      # pragma: no cover - POSIX 以外
+        who = os.getpid()
+    return Path(tempfile.gettempdir()) / f"biomni-hypo-{who}" / "workspace"
+
+
 def store() -> RunStore:
     """ラン保存を返す（初回アクセス時に開く）。
 
-    既定の場所で開けなければローカルディスクに逃がす。ここで諦めると
-    ラン開始も履歴もすべて 500 になる。黙って逃げるのではなく、
-    どこに保存しているかを /api/health と画面に出す。
+    開ける場所が見つかるまで順に試す。ここで諦めると、ラン開始も履歴も
+    すべて落ちてアプリが使えなくなる。保存先が理由でアプリ全体が
+    止まることがあってはならない（docs/design/27）。
+
+    黙って逃げるのではなく、どこに保存しているかを /api/health と画面に出す。
     """
     global _STORE, _STORE_FALLBACK
     if _STORE is not None:
         return _STORE
 
     wanted = Path(SETTINGS.workspace_path) / "runs.sqlite3"
-    try:
-        _STORE = RunStore(wanted)
-        return _STORE
-    except StoreUnavailable as first:
-        fallback = _fallback_workspace() / "runs.sqlite3"
-        if fallback.resolve() == wanted.resolve():
-            raise
+    candidates: list[tuple[Path, bool]] = [(wanted, False)]
+    for path in (_fallback_workspace() / "runs.sqlite3", _temporary_workspace() / "runs.sqlite3"):
+        if all(path != seen for seen, _ in candidates):
+            candidates.append((path, path != wanted))
+
+    reasons: list[str] = []
+    for path, is_fallback in candidates:
         try:
-            _STORE = RunStore(fallback)
-        except StoreUnavailable as second:
-            raise StoreUnavailable(
-                f"{first}\n\n逃げ先も開けませんでした: {fallback}\n{second}"
-            ) from second
-        _STORE_FALLBACK = {
-            "wanted": str(wanted),
-            "using": str(fallback),
-            "reason": str(first).splitlines()[0],
-        }
-        log.warning(
-            "保存先を %s に変更しました（%s を開けません）。%s", fallback, wanted, first
-        )
+            _STORE = RunStore(path)
+        except StoreUnavailable as exc:
+            reasons.append(str(exc))
+            continue
+        if is_fallback:
+            _STORE_FALLBACK = {
+                "wanted": str(wanted),
+                "using": str(path),
+                "reason": reasons[0].splitlines()[0] if reasons else "",
+                # /tmp は再起動で消える。「保存した履歴が無い」を防ぐため明示する
+                "temporary": str(path).startswith(tempfile.gettempdir()),
+            }
+            log.warning("保存先を %s に変更しました（%s を開けません）", path, wanted)
         return _STORE
+
+    raise StoreUnavailable("どこにも保存できません。\n\n" + "\n\n".join(reasons))
 
 
 # --------------------------------------------------------------- 例外の見せ方

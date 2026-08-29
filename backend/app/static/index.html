@@ -239,9 +239,17 @@ function collect() {
     background:$("background").value.trim(), exclude:[], dataset_ids:[],
     max_hypotheses:parseInt($("maxHyp").value,10)||5 };
 }
+function hintHtml(h) {
+  return `<div class="msg ${h.severity}">${h.severity==="error"?"❌":h.severity==="warning"?"⚠️":"ℹ️"} ${esc(h.message)}</div>`;
+}
 function renderHints(hints) {
-  $("hints").innerHTML = (hints||[]).map(h =>
-    `<div class="msg ${h.severity}">${h.severity==="error"?"❌":h.severity==="warning"?"⚠️":"ℹ️"} ${esc(h.message)}</div>`).join("");
+  $("hints").innerHTML = (hints||[]).map(hintHtml).join("");
+}
+// 起動時の通知は複数の出所から出る。renderHints は毎回中身を置き換えるので、
+// 続けて呼ぶと前のものが消える。保存先の警告がモデルの警告に上書きされて
+// 消えていた（実測で踏んだ）。追記したいときはこちら
+function appendHints(hints) {
+  $("hints").innerHTML += (hints||[]).map(hintHtml).join("");
 }
 function showTab(name) {
   [...$("tabs").children].forEach(b => b.setAttribute("aria-pressed", b.dataset.tab === name));
@@ -279,7 +287,7 @@ async function boot() {
   // 接続先を切り替えた場合も黙っていない
   if (health.ollama && health.ollama.fallback) {
     const f = health.ollama.fallback;
-    renderHints([{severity:"warning", message:
+    appendHints([{severity:"warning", message:
       `Ollama の接続先を ${f.using} に切り替えました。`
       + `\n設定値 ${f.configured} には届きません（.env の OLLAMA_BASE_URL）。`
       + `\n揃えるには: bash scripts/set-provider.sh ollama`}]);
@@ -288,12 +296,15 @@ async function boot() {
   // 保存先を逃がした場合は黙っていない。どこに保存しているか出す
   const st = health.store;
   if (st && st.fallback) {
-    renderHints([{severity:"warning", message:
+    appendHints([{severity:"warning", message:
       `保存先を ${st.fallback.using} に変更しました。`
       + `\n${st.fallback.wanted} を開けません（${st.fallback.reason}）。`
+      + (st.fallback.temporary
+          ? `\n※ 一時領域です。再起動すると履歴は消えます。`
+          : "")
       + `\nこの場所で残したい場合は .env の HYPO_WORKSPACE を書ける場所に設定してください。`}]);
   } else if (st && st.ok === false) {
-    renderHints([{severity:"error", message:`結果を保存できません。\n${st.error}`}]);
+    appendHints([{severity:"error", message:`結果を保存できません。\n${st.error}`}]);
   }
 
   MODES = templates.modes;
@@ -355,7 +366,7 @@ async function boot() {
     }
     lines.push(`<div class="msg warning">Claude API を使うなら:<br>`
       + `<code>bash scripts/set-provider.sh both --key sk-ant-...</code></div>`);
-    $("hints").innerHTML = lines.join("");
+    $("hints").innerHTML += lines.join("");
   } else if (blocked.length) {
     // 選べるものはあるが、弾かれたものもある。存在は伝えるが邪魔しない
     $("modelNote").innerHTML += ` <span style="color:var(--muted)">`

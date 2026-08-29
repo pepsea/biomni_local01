@@ -222,8 +222,31 @@ if [[ $START -eq 1 ]]; then
     fi
     sleep 1
   done
-  curl -sf -m 2 "http://localhost:${PORT}/api/health" >/dev/null 2>&1 \
-    || { ng "応答がありません。ログを見てください: $LOG"; tail -20 "$LOG" 2>/dev/null | sed 's/^/      /'; exit 1; }
+  if ! curl -sf -m 2 "http://localhost:${PORT}/api/health" >/dev/null 2>&1; then
+    ng "応答がありません"
+    # ログをそのまま貼るだけでは、どれが原因の行なのか分からない。
+    # 見覚えのある壊れ方は名指しして、直し方まで出す（実測で踏んだものだけ）
+    if grep -q "address already in use\|Address already in use" "$LOG" 2>/dev/null; then
+      echo "      原因: ポート ${PORT} を別のものが掴んでいます。"
+      echo "        ss -ltnp | grep :${PORT}"
+      echo "        kill \$(lsof -t -iTCP:${PORT} -sTCP:LISTEN)"
+      echo "      あるいは .env の APP_PORT を空いている番号に変えて、もう一度この設置を実行してください。"
+    elif grep -q "ModuleNotFoundError\|ImportError" "$LOG" 2>/dev/null; then
+      echo "      原因: 依存が足りません。"
+      echo "        bash scripts/setup_local.sh --full"
+    elif grep -q "データベースを開けません\|保存先" "$LOG" 2>/dev/null; then
+      echo "      原因: 保存先を開けません。設置し直すと書ける場所を選び直します。"
+      echo "        bash scripts/install-local-service.sh"
+      echo "      場所を指定するなら .env に:  HYPO_WORKSPACE=\$HOME/.biomni-hypo/workspace"
+    fi
+    echo
+    echo "      ログ（${LOG} の末尾）:"
+    tail -20 "$LOG" 2>/dev/null | sed 's/^/        /'
+    echo
+    echo "      サービスの状態:"
+    ${CTL_STATUS} --no-pager 2>&1 | head -8 | sed 's/^/        /'
+    exit 1
+  fi
 fi
 
 say "使い方"

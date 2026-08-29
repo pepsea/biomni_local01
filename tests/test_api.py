@@ -532,8 +532,8 @@ def test_health_survives_a_store_that_cannot_open_at_all(monkeypatch):
     assert body == {"ok": False, "error": "どこにも書けません"}
 
 
-def test_both_paths_failing_names_both(tmp_path, monkeypatch):
-    """逃げ先も開けない場合、どちらの理由も残すこと。"""
+def test_every_failing_path_is_named(monkeypatch):
+    """どこにも保存できない場合、試した場所の理由をすべて残すこと。"""
     from backend.app.store import StoreUnavailable
 
     settings = main.SETTINGS.model_copy(deep=True)
@@ -541,12 +541,13 @@ def test_both_paths_failing_names_both(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "SETTINGS", settings)
     monkeypatch.setattr(main, "_STORE", None)
     monkeypatch.setattr(main, "_fallback_workspace", lambda: Path("/proc/also-nowhere"))
+    monkeypatch.setattr(main, "_temporary_workspace", lambda: Path("/proc/nor-here"))
 
     with pytest.raises(StoreUnavailable) as got:
         main.store()
 
-    assert "/proc/nowhere" in str(got.value)
-    assert "/proc/also-nowhere" in str(got.value)
+    for path in ("/proc/nowhere", "/proc/also-nowhere", "/proc/nor-here"):
+        assert path in str(got.value), f"{path} の理由が残っていない"
 
 
 # ------------------------------------------- 実行形態が変わると届かなくなる URL
@@ -604,3 +605,44 @@ def test_fallback_workspace_without_home(monkeypatch):
     monkeypatch.delenv("HOME", raising=False)
     path = main._fallback_workspace()
     assert path.is_absolute(), f"絶対パスになっていない: {path}"
+
+
+def test_store_uses_a_temporary_place_when_nothing_else_works(tmp_path, monkeypatch):
+    """保存先が理由でアプリ全体が止まらないこと。
+
+    実測: 常駐させたら起動確認が「応答がありません」で終わり、ログには
+    「データベースを開けません」だけが残った。保存先はアプリを止める理由に
+    してはいけない。
+    """
+    from biomni_hypo.schemas import RunResult
+
+    settings = main.SETTINGS.model_copy(deep=True)
+    settings.workspace_path = "/proc/nowhere"
+    monkeypatch.setattr(main, "SETTINGS", settings)
+    monkeypatch.setattr(main, "_STORE", None)
+    monkeypatch.setattr(main, "_STORE_FALLBACK", None)
+    monkeypatch.setattr(main, "_fallback_workspace", lambda: Path("/proc/also-nowhere"))
+    monkeypatch.setattr(main, "_temporary_workspace", lambda: tmp_path / "last")
+
+    store = main.store()
+    store.save(RunResult(id="r_tmp", question="q", status="succeeded"))
+
+    assert store.path.parent == tmp_path / "last"
+    assert main.store().get("r_tmp").question == "q"
+
+
+def test_a_temporary_place_is_marked_as_such(tmp_path, monkeypatch):
+    """/tmp に落ちたことは明示すること（再起動で消えるため）。"""
+    import tempfile as tempfile_mod
+
+    settings = main.SETTINGS.model_copy(deep=True)
+    settings.workspace_path = "/proc/nowhere"
+    monkeypatch.setattr(main, "SETTINGS", settings)
+    monkeypatch.setattr(main, "_STORE", None)
+    monkeypatch.setattr(main, "_STORE_FALLBACK", None)
+    monkeypatch.setattr(main, "_fallback_workspace", lambda: Path("/proc/also-nowhere"))
+    monkeypatch.setattr(main, "_temporary_workspace",
+                        lambda: Path(tempfile_mod.gettempdir()) / "biomni-hypo-test" / "workspace")
+
+    main.store()
+    assert main._STORE_FALLBACK["temporary"] is True
