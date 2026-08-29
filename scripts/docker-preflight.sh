@@ -111,6 +111,30 @@ ollama_host_hint() {
 MSG
 }
 
+
+# .env の 1 行を書き換える（無ければ足す）。set-provider.sh と同じ実装。
+set_env() {
+  KEY_NAME="$1" KEY_VALUE="$2" python3 - <<'PYENV'
+import os, pathlib
+key, value = os.environ["KEY_NAME"], os.environ["KEY_VALUE"]
+path = pathlib.Path(".env")
+lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+out, written = [], False
+for line in lines:
+    stripped = line.lstrip("#").lstrip()
+    if stripped.startswith(f"{key}="):
+        if written:
+            continue
+        out.append(f"{key}={value}")
+        written = True
+    else:
+        out.append(line)
+if not written:
+    out.append(f"{key}={value}")
+path.write_text("\n".join(out) + "\n", encoding="utf-8")
+PYENV
+}
+
 printf '\n\033[1m== 起動前チェック\033[0m\n'
 
 # 何より先に Docker が動いているか。動いていなければ、この先の確認は
@@ -156,6 +180,41 @@ if in_use "$APP_PORT" && ! ours_port "$APP_PORT"; then
 else
   ok "APP_PORT=$APP_PORT は使えます"
 fi
+
+# --- bind マウントの所有者とコンテナのユーザー ---
+# ./data と ./workspace は bind マウントなので、所有者はホスト側のまま。
+# コンテナのユーザー（APP_UID、既定 1000）と食い違うと書けない。
+# 実測: /app/data/biomni_data/data_lake に permission がない、で止まった。
+# ホストで chmod しても UID が違えば直らないので、UID のほうを合わせる。
+MY_UID=$(id -u); MY_GID=$(id -g)
+ENV_UID=$(env_of APP_UID); ENV_GID=$(env_of APP_GID)
+mkdir -p data workspace 2>/dev/null
+if [[ "$MY_UID" == "0" ]]; then
+  # root で回すと、コンテナ側の権限を落としている意味が無くなる。
+  # 0 を書き込まないこと（useradd --uid 0 もそもそも通らない）
+  warn "root で実行しています。APP_UID は変更しません"
+  echo "      コンテナは既定の uid=1000 で動きます。data/ workspace/ の所有者を"
+  echo "      それに合わせるか、一般ユーザーで実行し直してください。"
+elif [[ "$ENV_UID" != "$MY_UID" || "$ENV_GID" != "$MY_GID" ]]; then
+  [[ -f .env ]] || cp .env.example .env
+  set_env APP_UID "$MY_UID"
+  set_env APP_GID "$MY_GID"
+  warn "APP_UID/APP_GID を ${MY_UID}/${MY_GID} に合わせました（.env）"
+  echo "      コンテナのユーザーがホストと違うと、bind マウントに書けません。"
+  echo "      ビルド引数なので、この後の作り直しで反映されます。"
+else
+  ok "APP_UID=${MY_UID} / APP_GID=${MY_GID}（ホストと一致）"
+fi
+
+# 中身の所有者がずれている場合は、こちらでは直せない（sudo が要る）
+for d in data workspace; do
+  owner=$(stat -c '%u' "$d" 2>/dev/null || stat -f '%u' "$d" 2>/dev/null || echo "$MY_UID")
+  if [[ "$owner" != "$MY_UID" ]]; then
+    ng "${d}/ の所有者が uid=${owner} です（あなたは uid=${MY_UID}）"
+    echo "      直す:  sudo chown -R \"\$(id -u):\$(id -g)\" ${d}"
+    FAIL=1
+  fi
+done
 
 # --- ollama コンテナ（もう compose には無い）---
 # COMPOSE_PROFILES=ollama が .env に残っていることがある。.env は git 管理外

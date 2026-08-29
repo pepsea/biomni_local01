@@ -495,3 +495,69 @@ def test_the_failure_names_a_place_to_use(tmp_path, monkeypatch, capsys):
     assert "実在する一番近い親" in err
     assert f"BIOMNI_PATH={tmp_path / 'biomni-data'}" in err, err
     assert os.access(tmp_path / "biomni-data", os.W_OK)
+
+
+# ------------------------------------- bind マウントの所有者とコンテナの UID
+# 実測: /app/data/biomni_data/data_lake に permission がない、で止まった。
+# ./data は bind マウントなので所有者はホスト側のまま。コンテナのユーザー
+# （APP_UID、既定 1000）と食い違うと書けない。ホストで chmod しても直らない。
+
+
+def _preflight_in(repo: Path, env: dict) -> subprocess.CompletedProcess:
+    import os
+
+    return subprocess.run(  # noqa: S603
+        ["bash", str(repo / "scripts/docker-preflight.sh")],
+        capture_output=True, text=True, timeout=120, cwd=repo,
+        env={**os.environ, **env},
+    )
+
+
+@pytest.fixture
+def repo_copy(tmp_path):
+    """.env を書き換えるので、リポジトリを汚さないよう複製して試す。"""
+    work = tmp_path / "repo"
+    (work / "scripts").mkdir(parents=True)
+    for name in ("docker-preflight.sh",):
+        shutil.copy(ROOT / "scripts" / name, work / "scripts" / name)
+    shutil.copy(ROOT / ".env.example", work / ".env.example")
+    (work / ".env").write_text("APP_PORT=5002\nOLLAMA_BASE_URL=http://localhost:11434\n",
+                               encoding="utf-8")
+    return work
+
+
+def test_app_uid_is_aligned_with_the_host(repo_copy, tmp_path):
+    """APP_UID がホストと違えば .env を合わせること。"""
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    (fake / "docker").write_text("#!/usr/bin/env bash\ncase \"$1\" in info) exit 0;; *) exit 0;; esac\n")
+    (fake / "docker").chmod(0o755)
+
+    proc = _preflight_in(repo_copy, {"PATH": f"{fake}:/usr/bin:/bin"})
+    env_text = (repo_copy / ".env").read_text(encoding="utf-8")
+
+    import os
+    if os.getuid() == 0:
+        # root では書き込まない（コンテナの権限を落としている意味が無くなる）
+        assert "root で実行しています" in proc.stdout
+        assert "APP_UID=" not in env_text
+    else:
+        assert f"APP_UID={os.getuid()}" in env_text
+        assert f"APP_GID={os.getgid()}" in env_text
+
+
+def test_running_twice_is_quiet(repo_copy, tmp_path):
+    """2 回目は「一致」と言うだけで、書き換えを繰り返さないこと。"""
+    import os
+
+    if os.getuid() == 0:
+        pytest.skip("root では APP_UID を書かない")
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    (fake / "docker").write_text("#!/usr/bin/env bash\nexit 0\n")
+    (fake / "docker").chmod(0o755)
+
+    _preflight_in(repo_copy, {"PATH": f"{fake}:/usr/bin:/bin"})
+    second = _preflight_in(repo_copy, {"PATH": f"{fake}:/usr/bin:/bin"})
+    assert "ホストと一致" in second.stdout
+    assert (repo_copy / ".env").read_text(encoding="utf-8").count("APP_UID=") == 1
