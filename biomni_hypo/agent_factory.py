@@ -18,11 +18,13 @@ import logging
 import sys
 import textwrap
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from biomni_hypo.config import Settings, apply_biomni_env
 from biomni_hypo.llm import build_agent_llm
 from biomni_hypo.models import ModelNotAvailable, apply_model_selection
+from biomni_hypo.paths import ensure_writable_dir
 from biomni_hypo.policy import ResourcePolicy
 
 log = logging.getLogger(__name__)
@@ -173,6 +175,17 @@ def build_agent(
 
     from biomni.agent import A1  # 遅延 import（環境変数適用後）
     from biomni.version import __version__ as biomni_version
+
+    # A1.__init__ は <data_path>/biomni_data/benchmark を最初に makedirs する。
+    # 書けない場所だと、利用者には見覚えのない "benchmark" というパスだけが
+    # エラーに出て、何を直せばよいのか分からない（実測で踏んだ）。
+    # 手前で作って確かめ、駄目ならこちらの言葉で言う。
+    for name in ("data_lake", "benchmark"):
+        ensure_writable_dir(
+            Path(settings.data_path) / "biomni_data" / name,
+            what=f"biomni のデータ置き場（{name}）",
+            env_var="BIOMNI_PATH",
+        )
 
     # expected_data_lake_files を必ず渡す（§4.4）。
     # 空リストを渡すと A1 はダウンロードを完全にスキップする。

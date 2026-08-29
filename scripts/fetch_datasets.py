@@ -15,12 +15,11 @@ from __future__ import annotations
 import argparse
 import os
 import pathlib
-import shutil
 import sys
-import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
+from biomni_hypo import paths
 from biomni_hypo.config import Settings, apply_biomni_env  # noqa: E402
 from biomni_hypo.policy import ResourcePolicy  # noqa: E402
 
@@ -106,90 +105,16 @@ def main(argv: list[str] | None = None) -> int:
 #: データレイクに要るおおよその容量（許可リスト最小構成で 200MB ほど）
 _NEEDED_BYTES = 300 * 1024 * 1024
 
-
-def _existing_ancestor(path: pathlib.Path) -> pathlib.Path:
-    """実在する一番近い親を返す。どこから先が無いのかを言うため。"""
-    for candidate in [path, *path.parents]:
-        if candidate.exists():
-            return candidate
-    return pathlib.Path("/")
-
-
-def _writable_candidate() -> str:
-    """実際に書けると確かめた置き場所を 1 つ返す。空文字なら見つからない。"""
-    for base in (os.environ.get("HOME", ""), tempfile.gettempdir()):
-        if not base:
-            continue
-        candidate = pathlib.Path(base) / "biomni-data"
-        try:
-            candidate.mkdir(parents=True, exist_ok=True)
-            probe = candidate / ".probe"
-            probe.write_bytes(b"x")
-            probe.unlink()
-        except OSError:
-            continue
-        return str(candidate)
-    return ""
+# 置き場所の調べ方は biomni_hypo.paths に寄せてある（3 か所で同じことをする）
+_existing_ancestor = paths.existing_ancestor
+_is_read_only = paths.is_read_only
+_writable_candidate = paths.writable_candidate
 
 
 def _why_cannot_use(path: pathlib.Path, exc: Exception | None) -> str:
-    """その場で調べて理由を添える。
-
-    「作れません」だけでは打つ手が無い。権限なのか、読み取り専用なのか、
-    容量なのか、親が無いのかで対処が違う（docs/design/27 と同じ考え方）。
-    """
-    facts: list[str] = []
-    if exc is not None:
-        facts.append(f"  {type(exc).__name__}: {exc}")
-
-    near = _existing_ancestor(path)
-    facts.append(f"  実在する一番近い親 : {near}")
-    facts.append(f"  そこに書けるか     : {os.access(near, os.W_OK)}")
-
-    try:
-        usage = shutil.disk_usage(near)
-        facts.append(f"  空き容量           : {usage.free / 1e9:.1f} GB")
-        if usage.free < _NEEDED_BYTES:
-            facts.append("  → 空きが足りません（最小構成で 0.3 GB ほど要ります）")
-    except OSError:
-        pass
-
-    if _is_read_only(near):
-        facts.append("  → 読み取り専用でマウントされています")
-    resolved = str(near)
-    if resolved.startswith(("/mnt/", "/media/", "/net/")) or "nfs" in resolved:
-        facts.append("  → マウントされた場所です。権限や容量はマウント元の設定に従います")
-
-    candidate = _writable_candidate()
-    if candidate:
-        facts.append("")
-        facts.append(f"  書ける場所を 1 つ見つけました: {candidate}")
-        facts.append("  .env にこの 1 行を書いて、もう一度実行してください:")
-        facts.append(f"      BIOMNI_PATH={candidate}")
-    else:
-        facts.append("  .env の BIOMNI_PATH を書ける場所にしてください。")
-    return "\n".join(facts)
-
-
-def _is_read_only(path: pathlib.Path, mounts_file: pathlib.Path | None = None) -> bool:
-    """そのパスを含むマウントが ro かどうか（Linux のみ分かる）。
-
-    mounts_file はテスト用。既定は /proc/mounts。
-    """
-    try:
-        mounts = (mounts_file or pathlib.Path("/proc/mounts")).read_text(encoding="utf-8")
-    except OSError:
-        return False
-    best, best_len = "", -1
-    for line in mounts.splitlines():
-        parts = line.split()
-        if len(parts) < 4:
-            continue
-        point, opts = parts[1], parts[3]
-        if str(path) == point or str(path).startswith(point.rstrip("/") + "/"):
-            if len(point) > best_len:
-                best, best_len = opts, len(point)
-    return best.split(",")[0] == "ro" if best else False
+    return paths.describe_unusable(
+        path, exc, env_var="BIOMNI_PATH", needed_bytes=_NEEDED_BYTES
+    )
 
 
 def _download_hint(exc: Exception, data_lake: pathlib.Path) -> str:
