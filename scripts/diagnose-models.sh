@@ -42,6 +42,22 @@ m = d.get("models") or {}
 print(f"  configured={m.get('configured')}  default={m.get('default')}")
 PYJ
 
+# Ollama がコンテナで動いていると、モデルの置き場がホストと別になる。
+# ホストで ollama pull しても、コンテナの中からは見えない。
+# 「mac では動くが Linux では使えるモデルが無い」の典型（docs/design/35）
+OLLAMA_CONTAINERS=""
+if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  OLLAMA_CONTAINERS=$(docker ps --format '{{.Names}}\t{{.Image}}\t{{.Ports}}' 2>/dev/null \
+    | grep -i ollama | awk -F'\t' '{print $1}' | tr '\n' ' ')
+fi
+export OLLAMA_CONTAINERS
+
+if [[ -n "${OLLAMA_CONTAINERS// /}" ]]; then
+  say "Ollama のコンテナ"
+  docker ps --format '  {{.Names}}  {{.Image}}  {{.Ports}}' 2>/dev/null | grep -i ollama
+  echo "      モデルはコンテナの中に置かれます。ホストで pull したものは見えません。"
+fi
+
 say "モデル一覧（アプリが見ているもの）"
 if ! curl -sf -m 20 "${BASE}/api/models" -o /tmp/_mz.json 2>/dev/null; then
   ng "/api/models が返りません（Ollama への問い合わせで詰まっている可能性）"
@@ -49,6 +65,8 @@ if ! curl -sf -m 20 "${BASE}/api/models" -o /tmp/_mz.json 2>/dev/null; then
 fi
 "$PY" - <<'PYJ'
 import json
+import os
+
 d = json.load(open("/tmp/_mz.json"))
 rows = d.get("models", [])
 usable = [m for m in rows if m["installed"] and m["allowed"]]
@@ -69,10 +87,21 @@ print()
 installed_local = [m for m in rows if m["local"] and m["installed"]]
 if not installed_local:
     print("  → アプリが見ている Ollama には、モデルが 1 件もありません。")
-    print("     手元で `ollama list` に見えているなら、別の Ollama を見ています。")
-    print("     ・別ポートを指している        → bash scripts/set-provider.sh ollama")
-    print("     ・コンテナ版が残っている      → docker ps | grep ollama → make docker-down")
-    print("     ・別ユーザーの ollama serve   → どちらか一方に寄せる")
+    containers = [c for c in os.environ.get("OLLAMA_CONTAINERS", "").split() if c]
+    if containers:
+        # コンテナで動いている場合、pull 先を間違えているのがほぼ確実
+        name = containers[0]
+        print("     Ollama はコンテナで動いています。モデルはコンテナの中に入れてください。")
+        print(f"       docker exec -it {name} ollama list")
+        print(f"       docker exec -it {name} ollama pull qwen3:14b     # Apache-2.0・推奨")
+        print()
+        print("     ホスト側の `ollama list` に見えていても、コンテナからは見えません。")
+        print("     置き場所が別だからです（mac で動いて Linux で動かない、の典型）。")
+    else:
+        print("     手元で `ollama list` に見えているなら、別の Ollama を見ています。")
+        print("     ・別ポートを指している        → bash scripts/set-provider.sh ollama")
+        print("     ・コンテナ版が残っている      → docker ps | grep ollama")
+        print("     ・別ユーザーの ollama serve   → どちらか一方に寄せる")
 elif not usable:
     print("  → 選べるモデルが 0 件です（商用ポリシーで全部弾かれています）。")
     print("     ollama pull qwen3:14b      （Apache-2.0・推奨）")
@@ -84,6 +113,6 @@ else:
     print("     ブラウザが古い HTML を掴んでいます（強制リロード: Ctrl/Cmd-Shift-R）。")
     print("     ヘッダーの build が git の HEAD と違うなら再ビルドしてください:")
     print("         git rev-parse --short HEAD")
-    print("         make docker-rebuild")
+    print("         make update")
 PYJ
 rm -f /tmp/_hz.json /tmp/_mz.json

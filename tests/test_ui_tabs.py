@@ -233,3 +233,14 @@ def test_the_history_link_opens_in_a_new_tab(html):
     corner = html[html.index('<div class="corner">') : html.index("</div>", html.index('<div class="corner">'))]
     assert 'target="_blank"' in corner, "別タブで開かない"
     assert 'rel="noopener"' in corner
+
+
+def test_an_empty_ollama_mentions_the_container_case(html):
+    """Ollama がコンテナで動いていると、置き場がホストと別になる。
+
+    ホストで pull しても見えないので、「コンテナを消せ」ではなく
+    「コンテナの中に入れろ」と言うこと。
+    """
+    assert "コンテナで動いている" in html
+    assert "docker exec -it" in html
+    assert "make docker-down" not in html, "コンテナ版が本番の構成もある"

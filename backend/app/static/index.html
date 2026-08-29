@@ -369,11 +369,13 @@ async function boot() {
       lines.push(`<div class="msg error">`
         + `<b>${esc(health.ollama.base_url)}</b> には Ollama がいますが、モデルが 1 件もありません。<br>`
         + `手元で <code>ollama list</code> にモデルが見えているなら、`
-        + `<b>アプリは別の Ollama を見ています</b>（別ポート／コンテナ版が残っている等）。<br><br>`
+        + `<b>アプリは別の Ollama を見ています</b>。<br><br>`
+        + `よくあるのは <b>Ollama がコンテナで動いている</b>場合です。`
+        + `モデルの置き場がホストと別なので、ホストで pull したものは見えません:<br>`
+        + `<code>docker exec -it &lt;コンテナ名&gt; ollama pull qwen3:14b</code><br><br>`
         + `切り分け:<br>`
-        + `<code>make model-check</code><br>`
-        + `<code>docker ps | grep ollama</code> — 残っていれば <code>make docker-down</code><br>`
-        + `<code>bash scripts/set-provider.sh ollama</code> — 実際のポートを探して合わせます`
+        + `<code>make model-check</code> — どこを見ているか・何が入っているかを出します<br>`
+        + `<code>bash scripts/set-provider.sh ollama</code> — モデルを持つ Ollama を探して合わせます`
         + `</div>`);
     }
     if (blocked.length) {
