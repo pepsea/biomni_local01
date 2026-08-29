@@ -189,7 +189,6 @@
     <label for="model">モデル</label>
     <select id="model"></select>
     <div class="hintline" id="modelNote"></div>
-    <div class="hintline" id="pullable"></div>
 
     <details>
       <summary>実行設定</summary>
@@ -345,9 +344,9 @@ async function boot() {
   // モデル: ローカル / クラウドを分けて出す。
   //
   // ローカルは **その Ollama に実際に入っているものだけ** を出す。
-  // 取得していないものまで並べると、選べない行が大半を占めて選択欄が読めない。
-  // 取得できるものは選択欄ではなく、下の 1 行で知らせる。
-  const notPulled = models.models.filter(m => m.local && !m.installed);
+  // 手元に無いモデルの名前は、選択欄にも案内にも出さないこと。
+  // 「取得すればこれも使える」を並べると、あると誤解される（実測で踏んだ）。
+  // 1 件も入っていない場合だけ、下の案内で取得の仕方を出す。
   const groups = { "ローカル (Ollama)": [], "クラウド (Claude API)": [] };
   models.models
     .filter(m => !m.local || m.installed)
@@ -366,19 +365,6 @@ async function boot() {
   $("model").onchange = updateModelNote;
   window.MODELS = models.models; updateModelNote();
 
-  // 取得すれば使えるもの。選択欄には出さず、ここで一覧にする
-  // 例に出すのは推奨モデル。並び順の先頭を勧めると deepseek などになってしまう
-  const pullable = notPulled.filter(m => m.allowed)
-    .sort((a, b) => (b.recommended ? 1 : 0) - (a.recommended ? 1 : 0))
-    .map(m => m.name);
-  if (pullable.length) {
-    $("pullable").innerHTML = `取得すれば使えるモデル: `
-      + pullable.map(n => `<code>${esc(n)}</code>`).join(" ")
-      + `<br>取得する: <code>ollama pull ${esc(pullable[0])}</code>`
-      + `（Ollama がコンテナなら <code>docker exec -it &lt;コンテナ名&gt; ollama pull ${esc(pullable[0])}</code>）`;
-  } else {
-    $("pullable").textContent = "";
-  }
 
   // 1 つも選べないときは、黙って空の選択欄を見せない。理由と次の一手を出す
   const blocked = models.models.filter(m => m.local && m.installed && !m.allowed);
