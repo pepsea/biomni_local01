@@ -13,6 +13,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 
@@ -113,6 +114,57 @@ def ollama_status(base_url: str, timeout: float = 5.0) -> OllamaStatus:
         return OllamaStatus(True, base_url, sorted(models))
     except Exception as exc:  # noqa: BLE001 - 接続系はすべて同じ扱いでよい
         return OllamaStatus(False, base_url, [], f"{type(exc).__name__}: {exc}")
+
+
+#: 実行形態が変わると届かなくなるホスト名の対応表。
+#:
+#: 同じ 1 台の Ollama でも、呼ぶ側がコンテナの中か外かで名前が変わる。
+#: .env は git 管理外なので、Docker 用に設定した host.docker.internal が
+#: 残ったままホストで起動する（またはその逆）ことが繰り返し起きた
+#: （docs/design/17, 21 §21.3）。届かなければ別名を試す。
+ALTERNATE_OLLAMA_HOSTS: dict[str, tuple[str, ...]] = {
+    "host.docker.internal": ("localhost", "127.0.0.1"),
+    "localhost": ("host.docker.internal",),
+    "127.0.0.1": ("host.docker.internal",),
+}
+
+
+@dataclass
+class OllamaResolution:
+    """実際に使う URL と、設定から変えたなら何から変えたか。"""
+
+    status: OllamaStatus
+    changed_from: str = ""
+
+    @property
+    def base_url(self) -> str:
+        return self.status.base_url
+
+
+def _swap_host(base_url: str, host: str) -> str:
+    parts = urlsplit(base_url)
+    netloc = host if parts.port is None else f"{host}:{parts.port}"
+    return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+
+
+def resolve_ollama_base_url(base_url: str, timeout: float = 3.0) -> OllamaResolution:
+    """設定された URL に届かなければ、実行形態違いの別名を試す。
+
+    見つかった場合は「何から変えたか」を残すこと。黙って別の Ollama を
+    掴むと、`ollama list` と画面のモデル一覧が食い違って原因が分からなくなる
+    （docs/design/21 §21.15 で実際に起きた）。
+    """
+    first = ollama_status(base_url, timeout=timeout)
+    if first.reachable:
+        return OllamaResolution(first)
+
+    host = urlsplit(base_url).hostname or ""
+    for alternate in ALTERNATE_OLLAMA_HOSTS.get(host, ()):
+        candidate = _swap_host(base_url, alternate)
+        status = ollama_status(candidate, timeout=timeout)
+        if status.reachable:
+            return OllamaResolution(status, changed_from=base_url)
+    return OllamaResolution(first)
 
 
 def build_chat_ollama(

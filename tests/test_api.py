@@ -547,3 +547,37 @@ def test_both_paths_failing_names_both(tmp_path, monkeypatch):
 
     assert "/proc/nowhere" in str(got.value)
     assert "/proc/also-nowhere" in str(got.value)
+
+
+# ------------------------------------------- 実行形態が変わると届かなくなる URL
+# 実測: .env は git 管理外なので、Docker 用に設定した host.docker.internal が
+# 残ったままホストで起動して「Ollama 未接続」になることが繰り返し起きた。
+
+
+def test_host_docker_internal_falls_back_to_localhost(client, monkeypatch):
+    """コンテナ用の名前が残っていても、ホストの Ollama を見つけること。"""
+    from biomni_hypo.mock_ollama import MockOllama
+
+    with MockOllama(models=LOCAL_MODELS) as mock:
+        port = mock.base_url.rsplit(":", 1)[1]
+        settings = main.SETTINGS.model_copy(deep=True)
+        settings.ollama_base_url = f"http://host.docker.internal:{port}"
+        monkeypatch.setattr(main, "SETTINGS", settings)
+        monkeypatch.setattr(main, "_model_catalog", None)
+        monkeypatch.setattr(main, "_OLLAMA_FALLBACK", None)
+
+        body = client.get("/api/health").json()["ollama"]
+
+    assert body["reachable"] is True, "別名を試していない"
+    assert body["base_url"] == f"http://localhost:{port}"
+    assert body["fallback"]["configured"].startswith("http://host.docker.internal")
+    assert main.SETTINGS.ollama_base_url == body["base_url"], "子プロセスにも効くよう SETTINGS を直すこと"
+
+
+def test_a_reachable_url_is_left_alone(client_with_ollama):
+    """届く設定はそのまま使う（余計な切り替えをしない）。"""
+    client, mock = client_with_ollama
+    body = client.get("/api/health").json()["ollama"]
+
+    assert body["base_url"] == mock.base_url
+    assert body["fallback"] is None

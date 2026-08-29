@@ -34,7 +34,7 @@ from biomni_hypo.config import (
     missing_dependencies,
     probe_import,
 )
-from biomni_hypo.llm import ollama_status
+from biomni_hypo.llm import ollama_status, resolve_ollama_base_url
 from biomni_hypo.models import ModelNotAvailable, apply_model_selection, list_local_models
 from biomni_hypo.policy import ResourcePolicy
 from biomni_hypo.question import (
@@ -248,10 +248,37 @@ class RunRequest(BaseModel):
         raise ValueError("input か question のどちらかが必要です")
 
 
+#: OLLAMA_BASE_URL を実行形態に合わせて直した場合の説明
+_OLLAMA_FALLBACK: dict[str, str] | None = None
+
+
+def _resolve_ollama() -> None:
+    """設定の OLLAMA_BASE_URL に届かなければ、実行形態違いの別名に切り替える。
+
+    .env は git 管理外なので、Docker 用に設定した host.docker.internal が
+    残ったままホストで起動する（またはその逆）ことが繰り返し起きた。
+    設定を配ることはできないので、届く先を自分で見つける。
+
+    SETTINGS を直すこと。子プロセスは settings.model_dump() を受け取るので、
+    ここで直しておけばワーカーもエージェントも同じ Ollama を見る。
+    """
+    global _OLLAMA_FALLBACK
+    resolution = resolve_ollama_base_url(SETTINGS.ollama_base_url)
+    if not resolution.changed_from:
+        return
+    SETTINGS.ollama_base_url = resolution.base_url
+    _OLLAMA_FALLBACK = {"configured": resolution.changed_from, "using": resolution.base_url}
+    log.warning(
+        "OLLAMA_BASE_URL を %s に切り替えました（設定値 %s には届きません）",
+        resolution.base_url, resolution.changed_from,
+    )
+
+
 def _catalog(refresh: bool = False):
     """モデル一覧。pull した直後は `?refresh=true` で取り直す。"""
     global _model_catalog
     if refresh or _model_catalog is None:
+        _resolve_ollama()
         _model_catalog = list_local_models(SETTINGS, POLICY)
     return _model_catalog
 
@@ -386,8 +413,8 @@ def _store_health() -> dict[str, Any]:
 
 @app.get("/api/health")
 async def health() -> dict[str, Any]:
+    catalog = _catalog()          # 先に呼ぶこと。ここで接続先が確定する
     st = ollama_status(SETTINGS.ollama_base_url, timeout=3)
-    catalog = _catalog()
     default = catalog.default(preferred=SETTINGS.model)
     missing = missing_dependencies(AGENT_DEPENDENCIES)
     biomni_probe = _biomni_probe()
@@ -412,7 +439,14 @@ async def health() -> dict[str, Any]:
             "error": biomni_probe.error,
             "python": biomni_probe.executable,
         },
-        "ollama": {"reachable": st.reachable, "base_url": st.base_url, "models": st.models, "error": st.error},
+        "ollama": {
+            "reachable": st.reachable,
+            "base_url": st.base_url,
+            "models": st.models,
+            "error": st.error,
+            # 設定値では届かず、別名に切り替えた場合はそれを言う
+            "fallback": _OLLAMA_FALLBACK,
+        },
         "models": {
             "configured": SETTINGS.model,
             "default": default.name if default else None,

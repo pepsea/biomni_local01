@@ -276,6 +276,15 @@ async function boot() {
     + ` · <span title="いま動いているビルド">v${esc(health.version)}${
         health.build ? " " + esc(health.build) : ""}</span>`;
 
+  // 接続先を切り替えた場合も黙っていない
+  if (health.ollama && health.ollama.fallback) {
+    const f = health.ollama.fallback;
+    renderHints([{severity:"warning", message:
+      `Ollama の接続先を ${f.using} に切り替えました。`
+      + `\n設定値 ${f.configured} には届きません（.env の OLLAMA_BASE_URL）。`
+      + `\n揃えるには: bash scripts/set-provider.sh ollama`}]);
+  }
+
   // 保存先を逃がした場合は黙っていない。どこに保存しているか出す
   const st = health.store;
   if (st && st.fallback) {
