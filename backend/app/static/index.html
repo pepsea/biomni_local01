@@ -226,7 +226,7 @@
   </section>
 </main>
 
-<div class="corner"><a href="/history">調査履歴 →</a></div>
+<div class="corner"><a href="/history" target="_blank" rel="noopener">調査履歴 →</a></div>
 
 <div class="drawer" id="drawer"></div>
 
@@ -234,6 +234,8 @@
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 let MODES = [], TEMPLATES = [], mode = "hypothesis", runId = null, es = null, RESULT = null, STEPS = [];
+// いま追いかけているラン。finish() 後に古い再接続タイマーが起きても拾わないため
+let watching = null;
 
 function errorText(detail, statusText) {
   // 500 の本文が空だと `Internal Server Error` の 7 文字しか出ない。
@@ -425,13 +427,25 @@ function updateModelNote() {
   }
 }
 
-$("preview").onclick = async () => {
+// ドロワーを開く。document のクリック監視が同じクリックで閉じてしまうので、
+// 呼び出し側で stopPropagation すること
+function openDrawer(html) {
+  $("drawer").innerHTML =
+    `<button class="close" onclick="document.getElementById('drawer').classList.remove('on')">×</button>` + html;
+  $("drawer").classList.add("on");
+}
+
+$("preview").onclick = async (e) => {
+  e.stopPropagation();
   try {
     const r = await api("/api/question/preview", {method:"POST",
       headers:{"content-type":"application/json"}, body:JSON.stringify(collect())});
-    renderHints(r.hints); showTab("trace");
-    $("tab-trace").innerHTML = `<h2>エージェントに渡すプロンプト (${r.prompt_language})</h2><pre>${esc(r.prompt)}</pre>`;
-  } catch (e) { renderHints([{severity:"error", message:e.message}]); }
+    renderHints(r.hints);
+    // 以前は実行トレースの中身を置き換えていた。戻す手段が無く、
+    // 調査中に押すと進行表示が消えたまま戻らなかった（実測で踏んだ）。
+    // ドロワーに出せば、× か外側クリックで元の画面に戻る。
+    openDrawer(`<h2>エージェントに渡すプロンプト (${esc(r.prompt_language)})</h2><pre>${esc(r.prompt)}</pre>`);
+  } catch (e2) { renderHints([{severity:"error", message:e2.message}]); }
 };
 
 $("run").onclick = async () => {
@@ -464,9 +478,16 @@ $("cancel").onclick = async () => {
   $("cancel").disabled = false;
   finish();          // done イベントが来なくてもボタンを戻す
 };
-function finish() { if (es) { es.close(); es = null; } $("run").disabled = false; $("cancel").style.display = "none"; }
+function finish() {
+  watching = null;
+  if (es) { es.close(); es = null; }
+  connNote("");
+  $("run").disabled = false;
+  $("cancel").style.display = "none";
+}
 
 function listen(id) {
+  watching = id;
   es = new EventSource(`/api/runs/${id}/events`);
   let live = "";
   es.addEventListener("token", ev => {          // ← リアルタイム表示
@@ -507,7 +528,49 @@ function listen(id) {
   });
   es.addEventListener("input_hints", ev => renderHints(JSON.parse(ev.data).hints));
   es.addEventListener("done", async () => { await showResult(id); finish(); });
-  es.onerror = () => finish();
+
+  // EventSource は接続が切れると自分で繋ぎ直す。onerror はその途中でも呼ばれる。
+  // ここで無条件に finish() すると、サーバではランが続いているのに
+  // 停止ボタンが消え、進行も止まって見える（実測: 「停止ボタンが勝手に消える」）。
+  // 再接続中なのか本当に閉じたのかを readyState で分けること。
+  es.onerror = () => {
+    if (es && es.readyState === EventSource.CONNECTING) {
+      connNote("接続が切れました。再接続しています…");
+      return;                       // ブラウザに任せる。id: と last-event-id で続きから流れる
+    }
+    reconcile(id);                  // 本当に閉じた。勝手に終わったことにしない
+  };
+}
+
+// 状態欄に「接続の様子」だけを出す。phase の表示を潰さないよう専用の行にする
+function connNote(text) {
+  let el = $("connNote");
+  if (!el) {
+    el = document.createElement("div"); el.id = "connNote"; el.className = "msg warning";
+    $("status").appendChild(el);
+  }
+  el.textContent = text ? `⚠️ ${text}` : "";
+  el.style.display = text ? "" : "none";
+}
+
+// 「終わった」ことにする前に、サーバに実際の状態を聞く。
+// ランはブラウザではなくサーバで動いている。接続が切れただけで
+// 止まったわけではない。
+async function reconcile(id) {
+  if (es) { es.close(); es = null; }
+  try {
+    const r = await api(`/api/runs/${id}`);
+    if (r.status === "running") {
+      connNote("接続が切れました。つなぎ直します…");
+      setTimeout(() => { if (watching === id) listen(id); }, 2000);
+      return;                       // 停止ボタンは出したままにする
+    }
+    connNote("");
+    await showResult(id);
+  } catch (e) {
+    connNote(`状態を確認できません: ${e.message}`);
+  }
+  finish();
 }
 
 // モデルが <execute>/<solution> を出せていないときの警告。ステップ一覧に紛れると
@@ -652,8 +715,7 @@ document.addEventListener("click", e => {
     const ev = JSON.parse(chip.dataset.ev);
     const step = STEPS.find(s => s.idx === ev.step_idx) || (RESULT?.steps || []).find(s => s.idx === ev.step_idx);
     const src = (RESULT?.steps || []).find(s => s.kind === "execute" && s.idx === ev.step_idx - 1);
-    $("drawer").innerHTML = `<button class="close" onclick="document.getElementById('drawer').classList.remove('on')">×</button>
-      <h2>${esc(ev.kind)}</h2><h3 style="margin:0 0 8px">${ev.url?`<a href="${esc(ev.url)}" target="_blank">${esc(ev.identifier)}</a>`:esc(ev.identifier)}</h3>
+    openDrawer(`<h2>${esc(ev.kind)}</h2><h3 style="margin:0 0 8px">${ev.url?`<a href="${esc(ev.url)}" target="_blank">${esc(ev.identifier)}</a>`:esc(ev.identifier)}</h3>
       <table><tbody>
         <tr><th>立場</th><td>${esc(ev.stance)}</td></tr>
         <tr><th>検証</th><td>${esc(ev.verification_status)} — ${esc(ev.verification_note||"")}</td></tr>
@@ -661,8 +723,7 @@ document.addEventListener("click", e => {
       ${ev.why ? `<h2>なぜこれが根拠になるか</h2><p>${esc(ev.why)}</p>` : ""}
       <h2>実行結果からの抜粋</h2><pre>${esc(ev.excerpt||"(なし)")}</pre>
       ${src ? `<h2>この結果を出したコード（ステップ ${src.idx}）</h2><pre>${esc(src.code)}</pre>` : ""}
-      ${step && step.text ? `<h2>ステップ ${step.idx} の出力</h2><pre>${esc(step.text.slice(0,3000))}</pre>` : ""}`;
-    $("drawer").classList.add("on");
+      ${step && step.text ? `<h2>ステップ ${step.idx} の出力</h2><pre>${esc(step.text.slice(0,3000))}</pre>` : ""}`);
   } else if (!e.target.closest(".drawer")) {
     $("drawer").classList.remove("on");
   }

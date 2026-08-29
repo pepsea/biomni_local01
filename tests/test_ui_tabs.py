@@ -187,10 +187,49 @@ def test_the_stop_button_is_not_a_tab(html):
 
 def test_the_history_link_is_in_the_bottom_left_corner(html):
     """履歴は左下に常時出す。ヘッダ右端だと調べている最中は目に入らない。"""
-    assert '<div class="corner"><a href="/history">' in html
+    assert '<div class="corner"><a href="/history"' in html
     corner = html[html.index(".corner {") : html.index("}", html.index(".corner {"))]
     assert "position:fixed" in corner
     assert "left:" in corner and "bottom:" in corner, f"左下に固定していない: {corner}"
 
     header = html[html.index("<header>") : html.index("</header>")]
     assert "/history" not in header, "ヘッダにも残っていて 2 つある"
+
+
+def test_a_dropped_stream_does_not_end_the_run(html):
+    """SSE の切断で「終わったこと」にしないこと。
+
+    実測: 「停止ボタンが勝手に消える」。EventSource は接続が切れると自分で
+    繋ぎ直すので onerror は再接続の途中でも呼ばれる。そこで finish() すると、
+    サーバではランが続いているのに停止ボタンが消える。
+    """
+    handler = html[html.index("es.onerror = ") : html.index("\n}", html.index("es.onerror = "))]
+    assert "readyState" in handler, "再接続中かどうかを見ていない"
+    assert "CONNECTING" in handler, "EventSource.CONNECTING で分けること"
+    assert "es.onerror = () => finish()" not in html, "無条件に finish している"
+
+
+def test_the_real_state_comes_from_the_server(html):
+    """接続が切れただけで止まったとは限らない。サーバに状態を聞くこと。"""
+    assert "async function reconcile(" in html
+    body = html[html.index("async function reconcile(") :]
+    body = body[: body.index("\n}")]
+    assert "/api/runs/" in body, "サーバに問い合わせていない"
+    assert '"running"' in body, "running のときに続きを追いかけていない"
+
+
+def test_the_prompt_preview_does_not_replace_the_trace(html):
+    """プロンプト確認から元に戻れること。
+
+    実測: 実行トレースの中身を置き換えていたため、押すと戻せなくなった。
+    """
+    handler = html[html.index('$("preview").onclick') :]
+    handler = handler[: handler.index("\n};")]
+    assert "openDrawer(" in handler, "ドロワーに出していない"
+    assert '$("tab-trace").innerHTML' not in handler, "実行トレースを置き換えている"
+
+
+def test_the_history_link_opens_in_a_new_tab(html):
+    corner = html[html.index('<div class="corner">') : html.index("</div>", html.index('<div class="corner">'))]
+    assert 'target="_blank"' in corner, "別タブで開かない"
+    assert 'rel="noopener"' in corner
