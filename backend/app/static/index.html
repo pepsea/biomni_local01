@@ -276,6 +276,17 @@ async function boot() {
     + ` · <span title="いま動いているビルド">v${esc(health.version)}${
         health.build ? " " + esc(health.build) : ""}</span>`;
 
+  // 保存先を逃がした場合は黙っていない。どこに保存しているか出す
+  const st = health.store;
+  if (st && st.fallback) {
+    renderHints([{severity:"warning", message:
+      `保存先を ${st.fallback.using} に変更しました。`
+      + `\n${st.fallback.wanted} を開けません（${st.fallback.reason}）。`
+      + `\nこの場所で残したい場合は .env の HYPO_WORKSPACE を書ける場所に設定してください。`}]);
+  } else if (st && st.ok === false) {
+    renderHints([{severity:"error", message:`結果を保存できません。\n${st.error}`}]);
+  }
+
   MODES = templates.modes;
   $("modes").innerHTML = MODES.map(m => `<button data-mode="${m.id}" aria-pressed="${m.id===mode}">${esc(m.label)}</button>`).join("");
   $("modes").onclick = e => { const b = e.target.closest("button"); if (!b) return; setMode(b.dataset.mode); };

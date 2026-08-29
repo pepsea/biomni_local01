@@ -10,6 +10,7 @@ import asyncio
 import functools
 import json
 import logging
+import os
 import queue as queue_mod
 import subprocess
 import traceback
@@ -107,12 +108,56 @@ POLICY = ResourcePolicy.load(SETTINGS.policy_path)
 _STORE: RunStore | None = None
 
 
+#: 逃げ先を使っている場合の説明。/api/health と画面に出す
+_STORE_FALLBACK: dict[str, str] | None = None
+
+
+def _fallback_workspace() -> Path:
+    """DB を置けなかったときの逃げ先。必ずローカルディスクにする。
+
+    既定の保存先はリポジトリの直下（workspace/）だが、リポジトリ自体が
+    ネットワークマウント上に置かれていることがある。sqlite はロックが
+    効かないファイルシステムでは開けず、"unable to open database file"
+    としか言わない（実測で踏んだ: /mnt/... に clone した環境）。
+    """
+    base = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
+    return Path(base) / "biomni-hypo" / "workspace"
+
+
 def store() -> RunStore:
-    """ラン保存を返す（初回アクセス時に開く）。"""
-    global _STORE
-    if _STORE is None:
-        _STORE = RunStore(Path(SETTINGS.workspace_path) / "runs.sqlite3")
-    return _STORE
+    """ラン保存を返す（初回アクセス時に開く）。
+
+    既定の場所で開けなければローカルディスクに逃がす。ここで諦めると
+    ラン開始も履歴もすべて 500 になる。黙って逃げるのではなく、
+    どこに保存しているかを /api/health と画面に出す。
+    """
+    global _STORE, _STORE_FALLBACK
+    if _STORE is not None:
+        return _STORE
+
+    wanted = Path(SETTINGS.workspace_path) / "runs.sqlite3"
+    try:
+        _STORE = RunStore(wanted)
+        return _STORE
+    except StoreUnavailable as first:
+        fallback = _fallback_workspace() / "runs.sqlite3"
+        if fallback.resolve() == wanted.resolve():
+            raise
+        try:
+            _STORE = RunStore(fallback)
+        except StoreUnavailable as second:
+            raise StoreUnavailable(
+                f"{first}\n\n逃げ先も開けませんでした: {fallback}\n{second}"
+            ) from second
+        _STORE_FALLBACK = {
+            "wanted": str(wanted),
+            "using": str(fallback),
+            "reason": str(first).splitlines()[0],
+        }
+        log.warning(
+            "保存先を %s に変更しました（%s を開けません）。%s", fallback, wanted, first
+        )
+        return _STORE
 
 
 # --------------------------------------------------------------- 例外の見せ方
@@ -330,6 +375,15 @@ def _biomni_probe(force: bool = False) -> ImportReport:
     return _BIOMNI_PROBE
 
 
+def _store_health() -> dict[str, Any]:
+    """保存先の状態。ここで例外を出すと health まで落ちるので握る。"""
+    try:
+        path = str(store().path)
+    except StoreUnavailable as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "path": path, "fallback": _STORE_FALLBACK}
+
+
 @app.get("/api/health")
 async def health() -> dict[str, Any]:
     st = ollama_status(SETTINGS.ollama_base_url, timeout=3)
@@ -368,6 +422,8 @@ async def health() -> dict[str, Any]:
         "policy_version": POLICY.version,
         "running": list(_running),
         "commercial_mode": SETTINGS.commercial_mode,
+        # どこに保存しているか。逃げ先を使っているなら理由ごと出す
+        "store": _store_health(),
     }
 
 

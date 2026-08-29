@@ -1,3 +1,4 @@
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -476,3 +477,73 @@ def test_the_client_fixture_never_reaches_a_real_ollama(client):
     テストが落ちた（実測で踏んだ）。fixture の側で塞ぐ。
     """
     assert main.SETTINGS.ollama_base_url == UNREACHABLE_OLLAMA
+
+
+# ------------------------------------------------ 保存先が開けないときの逃げ先
+# 実測: リポジトリをネットワークマウント（/mnt/...）に置くと sqlite が開けず、
+# 「調べる」を押すたびに 500 になった。ここで諦めるとアプリ全体が使えない。
+
+
+@pytest.fixture
+def unwritable_workspace(tmp_path, monkeypatch):
+    """既定の保存先が開けない状態を作り、逃げ先を tmp に向ける。"""
+    settings = main.SETTINGS.model_copy(deep=True)
+    settings.workspace_path = "/proc/nowhere"     # mkdir できない
+    monkeypatch.setattr(main, "SETTINGS", settings)
+    monkeypatch.setattr(main, "_STORE", None)
+    monkeypatch.setattr(main, "_STORE_FALLBACK", None)
+    fallback = tmp_path / "fallback"
+    monkeypatch.setattr(main, "_fallback_workspace", lambda: fallback)
+    return fallback
+
+
+def test_store_falls_back_to_local_disk(unwritable_workspace):
+    """既定の保存先が開けなくても、ランは動くこと。"""
+    from biomni_hypo.schemas import RunResult
+
+    store = main.store()
+    assert store.path.parent == unwritable_workspace, "逃げ先を使っていない"
+
+    store.save(RunResult(id="r1", question="q", status="succeeded"))
+    assert main.store().get("r1").question == "q", "逃げ先で読み書きできていない"
+
+
+def test_health_says_where_it_is_saving(unwritable_workspace):
+    """逃げたことを黙っていないこと。どこに・なぜを出す。"""
+    client = TestClient(main.app)
+    body = client.get("/api/health").json()["store"]
+
+    assert body["ok"] is True
+    assert body["fallback"]["using"].startswith(str(unwritable_workspace))
+    assert body["fallback"]["wanted"].startswith("/proc/nowhere")
+    assert body["fallback"]["reason"], "理由が空"
+
+
+def test_health_survives_a_store_that_cannot_open_at_all(monkeypatch):
+    """逃げ先も駄目なら、health は落ちずに理由を返すこと。"""
+    from backend.app.store import StoreUnavailable
+
+    def unavailable():
+        raise StoreUnavailable("どこにも書けません")
+
+    monkeypatch.setattr(main, "store", unavailable)
+    body = TestClient(main.app).get("/api/health").json()["store"]
+
+    assert body == {"ok": False, "error": "どこにも書けません"}
+
+
+def test_both_paths_failing_names_both(tmp_path, monkeypatch):
+    """逃げ先も開けない場合、どちらの理由も残すこと。"""
+    from backend.app.store import StoreUnavailable
+
+    settings = main.SETTINGS.model_copy(deep=True)
+    settings.workspace_path = "/proc/nowhere"
+    monkeypatch.setattr(main, "SETTINGS", settings)
+    monkeypatch.setattr(main, "_STORE", None)
+    monkeypatch.setattr(main, "_fallback_workspace", lambda: Path("/proc/also-nowhere"))
+
+    with pytest.raises(StoreUnavailable) as got:
+        main.store()
+
+    assert "/proc/nowhere" in str(got.value)
+    assert "/proc/also-nowhere" in str(got.value)
