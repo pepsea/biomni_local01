@@ -125,8 +125,14 @@ MSG
   fi
 
   say "データセット（許可リストのうち最小限）"
-  python scripts/fetch_datasets.py --only gwas_catalog.pkl gene_info.parquet || \
-    ng "データセット取得に失敗（ネットワークを確認）"
+  # 失敗しても止めない（データセット無しでもアプリは動く）。ただし
+  # 何でも「ネットワークを確認」と言わないこと。理由はスクリプトが出す
+  if python scripts/fetch_datasets.py --only gwas_catalog.pkl gene_info.parquet; then
+    ok "データセット"
+  else
+    ng "データセット取得に失敗しました（上の理由を見てください）"
+    echo "      データセットが無くてもアプリは起動します。あとで:  make fetch"
+  fi
 fi
 
 say "完了"

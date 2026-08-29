@@ -60,3 +60,41 @@ def test_value_may_contain_equals(tmp_path, monkeypatch):
 
 def test_missing_file_is_not_an_error(tmp_path):
     assert load_dotenv_file(tmp_path / "nope.env") == {}
+
+
+# ------------------------------------------------------------ 相対パスの設定
+# 実測: .env の BIOMNI_PATH=./data のままデータセット取得が
+# 「data/biomni_data/data_lake が無い」で落ちた。相対パスは
+# プロセスの作業ディレクトリ次第で別の場所を指す。
+
+
+def test_relative_paths_resolve_against_the_repo(monkeypatch):
+    """相対の設定値は、実行した場所ではなくリポジトリを基準にすること。"""
+    from biomni_hypo.config import REPO_ROOT, Settings
+
+    monkeypatch.setenv("HYPO_SKIP_DOTENV", "1")
+    monkeypatch.setenv("BIOMNI_PATH", "./data")
+    monkeypatch.setenv("HYPO_WORKSPACE", "workspace")
+
+    settings = Settings()
+    assert settings.data_path == str(REPO_ROOT / "data")
+    assert settings.workspace_path == str(REPO_ROOT / "workspace")
+
+
+def test_absolute_paths_are_left_alone(monkeypatch, tmp_path):
+    from biomni_hypo.config import Settings
+
+    monkeypatch.setenv("HYPO_SKIP_DOTENV", "1")
+    monkeypatch.setenv("BIOMNI_PATH", str(tmp_path / "elsewhere"))
+    assert Settings().data_path == str(tmp_path / "elsewhere")
+
+
+def test_the_working_directory_does_not_change_the_answer(monkeypatch, tmp_path):
+    """notebooks/ から動かしても同じ場所を指すこと（これが本題）。"""
+    from biomni_hypo.config import Settings
+
+    monkeypatch.setenv("HYPO_SKIP_DOTENV", "1")
+    monkeypatch.setenv("BIOMNI_PATH", "./data")
+    here = Settings().data_path
+    monkeypatch.chdir(tmp_path)
+    assert Settings().data_path == here

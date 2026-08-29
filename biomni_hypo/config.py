@@ -77,6 +77,22 @@ def _env(name: str, default: str) -> str:
     return v if v not in (None, "") else default
 
 
+def _env_path(name: str, default: str) -> str:
+    """パスの設定値を絶対パスにして返す。
+
+    .env には `BIOMNI_PATH=./data` のように相対パスを書ける。相対のままだと
+    **プロセスの作業ディレクトリ次第で別の場所を指します**。ノートブックを
+    notebooks/ から実行したとき、systemd の WorkingDirectory が違うとき、
+    子プロセスが chdir したとき、それぞれ別の場所になる。
+    実測: データセット取得が `data/biomni_data/data_lake が無い` で落ちた。
+
+    基準はリポジトリのルート。設定ファイル（.env）が置いてある場所に合わせる。
+    """
+    value = _env(name, default)
+    path = Path(value).expanduser()
+    return str(path if path.is_absolute() else (REPO_ROOT / path).resolve())
+
+
 @dataclass(frozen=True)
 class Dependency:
     """import 名と pip 名。両者はしばしば食い違う（langchain_ollama / langchain-ollama）。"""
@@ -252,12 +268,12 @@ class Settings(BaseModel):
     )
     num_ctx: int = Field(default_factory=lambda: int(_env("HYPO_NUM_CTX", "32768")))
     num_predict: int = Field(default_factory=lambda: int(_env("HYPO_NUM_PREDICT", "4096")))
-    data_path: str = Field(default_factory=lambda: _env("BIOMNI_PATH", str(REPO_ROOT / "data")))
+    data_path: str = Field(default_factory=lambda: _env_path("BIOMNI_PATH", str(REPO_ROOT / "data")))
     workspace_path: str = Field(
-        default_factory=lambda: _env("HYPO_WORKSPACE", str(REPO_ROOT / "workspace"))
+        default_factory=lambda: _env_path("HYPO_WORKSPACE", str(REPO_ROOT / "workspace"))
     )
     policy_path: str = Field(
-        default_factory=lambda: _env("HYPO_POLICY_PATH", str(REPO_ROOT / "config" / "resource_policy.yaml"))
+        default_factory=lambda: _env_path("HYPO_POLICY_PATH", str(REPO_ROOT / "config" / "resource_policy.yaml"))
     )
     timeout_seconds: int = Field(default_factory=lambda: int(_env("BIOMNI_TIMEOUT_SECONDS", "600")))
     max_steps: int = Field(default_factory=lambda: int(_env("HYPO_MAX_STEPS", "60")))

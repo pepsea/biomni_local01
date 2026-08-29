@@ -393,3 +393,54 @@ def test_our_model_alone_is_not_a_warning(spaced):
 
     assert "だけが読み込まれています" in out, out
     assert "以外も読み込まれています" not in out
+
+
+# ------------------------------------------------- データセット取得の失敗理由
+# 実測: 取得が失敗すると、原因を問わず「ネットワークを確認」と出していた。
+# 実際には置き場所（相対パス）の問題だった。
+
+
+def _fetch_module():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "fetch_datasets", ROOT / "scripts" / "fetch_datasets.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize(
+    ("exc", "expected"),
+    [
+        (PermissionError("denied"), "書き込み権限"),
+        (FileNotFoundError("no such file or directory"), "相対パス"),
+        (OSError(28, "No space left on device"), "ディスクの空き"),
+        (TimeoutError("timed out"), "ネットワーク"),
+        (ValueError("何か別のこと"), "そのまま報告"),
+    ],
+)
+def test_download_failures_are_told_apart(exc, expected):
+    module = _fetch_module()
+    hint = module._download_hint(exc, Path("/tmp/dl"))
+    assert expected in hint, hint
+
+
+def test_an_unwritable_data_lake_is_named(tmp_path, capsys):
+    """作れない置き場所は、ネットワークのせいにしないこと。"""
+    import os
+
+    module = _fetch_module()
+    os.environ["HYPO_SKIP_DOTENV"] = "1"
+    os.environ["BIOMNI_PATH"] = "/proc/nowhere"
+    try:
+        rc = module.main(["--only", "gwas_catalog.pkl"])
+    finally:
+        os.environ.pop("BIOMNI_PATH", None)
+
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "データレイクを作れません" in err
+    assert "BIOMNI_PATH" in err
+    assert "ネットワーク" not in err, "見当違いの案内をしている"
