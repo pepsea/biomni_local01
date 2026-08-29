@@ -14,7 +14,7 @@ warn(){ printf '  \033[33m!\033[0m %s\n' "$1"; }
 
 env_of() { sed -n "s/^$1=//p" .env 2>/dev/null | head -1; }
 
-APP_PORT=$(env_of APP_PORT);       APP_PORT="${APP_PORT:-8000}"
+APP_PORT="${APP_PORT:-$(env_of APP_PORT)}"; APP_PORT="${APP_PORT:-8000}"
 OLLAMA_PORT=$(env_of OLLAMA_PORT); OLLAMA_PORT="${OLLAMA_PORT:-11434}"
 PROFILES=$(env_of COMPOSE_PROFILES)
 PROVIDER=$(env_of HYPO_PROVIDER);  PROVIDER="${PROVIDER:-ollama}"
@@ -73,6 +73,22 @@ probe_from_container() {
 # その名前のコンテナが自分のものか（= compose が再利用するので衝突しない）
 ours() { docker compose ps --format '{{.Service}}' 2>/dev/null | grep -qx "$1"; }
 
+# そのホストポートを掴んでいるのが自分のコンテナか。
+#
+# 「自分のサービスが動いているか」で代用してはいけない。コンテナが動いていても、
+# ポートを実際に掴んでいるのが別のプロセス（scripts/start.sh で起動した素の
+# uvicorn など）ということがある。その場合 compose は起動時に
+#   failed to bind host port 0.0.0.0:8001/tcp: address already in use
+# で落ちるが、チェックは通ってしまう（実測で踏んだ）。
+ours_port() {
+  local port="$1"
+  # `:8001->` だけを見る。直前の `:` が区切りになるので、8001 が 58001 の
+  # 一部に化けることはない。アドレス部を文字クラスで書こうとすると、
+  # ブラケット内のエスケープで足をすくわれる（実測で踏んだ）
+  docker ps --filter 'name=^biomni-app$' --format '{{.Ports}}' 2>/dev/null \
+    | grep -qF ":${port}->"
+}
+
 # Ollama を全インタフェースで待ち受けさせる手順。
 # ポートを必ず添えること。OLLAMA_HOST=0.0.0.0 だけ書くと既定の 11434 に戻り、
 # 別ポートで動かしている場合は設定を壊す
@@ -124,9 +140,18 @@ printf '  OLLAMA_BASE_URL=%s\n' "${OLLAMA_URL:-（未設定）}"
 FAIL=0
 
 # --- アプリのポート ---
-if in_use "$APP_PORT" && ! ours app; then
-  ng "APP_PORT=$APP_PORT は既に使われています： $(who_has "$APP_PORT")"
-  echo "      .env の APP_PORT を空いている番号に変えてください（例: APP_PORT=8003）"
+if in_use "$APP_PORT" && ! ours_port "$APP_PORT"; then
+  ng "APP_PORT=${APP_PORT} は既に使われています： $(who_has "$APP_PORT")"
+  echo "      compose は起動時に address already in use で落ちます。先に片付けてください。"
+  echo
+  echo "      1) 掴んでいるものを止める"
+  echo "           ss -ltnp | grep :${APP_PORT}        # 誰が掴んでいるか"
+  echo "           kill \$(lsof -t -iTCP:${APP_PORT} -sTCP:LISTEN)   # 素のプロセスなら"
+  echo "           docker rm -f biomni-app             # 古いコンテナなら"
+  echo "      2) あるいは .env の APP_PORT を空いている番号に変える（例: APP_PORT=8003）"
+  echo
+  echo "      そもそも Docker は要りません。Ollama はホストで動いているので:"
+  echo "           bash scripts/start.sh"
   FAIL=1
 else
   ok "APP_PORT=$APP_PORT は使えます"

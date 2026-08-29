@@ -569,3 +569,38 @@ Ollama をホストで動かしているなら、**アプリも同じホスト�
 `localhost:11434` にそのまま届き、上のどれも起きません。
 README のクイックスタートを `bash scripts/start.sh` から始めるようにしました。
 Docker が要るのは「常駐させたい」場合だけです。
+
+### ポートを「誰が」掴んでいるか
+
+```
+Error response from daemon: failed to set up container networking driver:
+failed to bind host port 0.0.0.0:8001/tcp: address already in use
+```
+
+`scripts/docker-preflight.sh` はポートの衝突を先に見るためのものなのに、
+これを通してしまいました。判定がこうなっていたためです。
+
+```bash
+ours() { docker compose ps --format '{{.Service}}' | grep -qx "$1"; }
+if in_use "$APP_PORT" && ! ours app; then ...
+```
+
+「自分のサービスが動いているか」で代用していました。コンテナが動いていても、
+**ポートを実際に掴んでいるのが別のプロセス**ということがあります。今回は
+`bash scripts/start.sh` で起動した素の uvicorn が 8001 を握ったままでした。
+
+掴み主そのものを見るようにしました。
+
+```bash
+ours_port() {
+  docker ps --filter 'name=^biomni-app$' --format '{{.Ports}}' | grep -qF ":${port}->"
+}
+```
+
+自分のコンテナが掴んでいるだけなら compose が入れ替えるので止めません。
+それ以外なら、掴み主の名前と PID、止め方、そして
+**Docker を使わない道**を並べて止めます。
+
+`APP_PORT` を環境変数からも読むようにしたので、この分岐はテストできます。
+ポートを実際に bind した状態で preflight を走らせ、
+「別プロセスが掴む → 失敗」「自分のコンテナが掴む → 通す」を両方確認しています。

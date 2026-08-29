@@ -15,6 +15,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -132,3 +133,70 @@ def test_preflight_flags_a_stale_compose_profile(tmp_path):
     text = (root / "scripts/docker-preflight.sh").read_text(encoding="utf-8")
     assert "この profile はもうありません" in text
     assert "set-provider.sh ollama" in text
+
+
+# ------------------------------------------------------- ポートを誰が掴むか
+# 実測: 素の uvicorn（scripts/start.sh）が 8001 を掴んだまま make docker-rebuild
+# を叩くと、preflight は通るのに docker が落ちた。
+#
+#   failed to bind host port 0.0.0.0:8001/tcp: address already in use
+#
+# 「自分のサービスが動いているか」で代用していたため。実際の掴み主を見る。
+
+
+def _fake_docker(tmp_path, ports: str = "") -> Path:
+    """docker が動いていて、biomni-app が `ports` を公開している状態を作る。"""
+    fake = tmp_path / "bin"
+    fake.mkdir(exist_ok=True)
+    (fake / "docker").write_text(
+        "#!/usr/bin/env bash\n"
+        'case "$*" in\n'
+        "  info*) exit 0 ;;\n"
+        f"  ps*--filter*) printf '%s\\n' '{ports}' ;;\n"
+        "  compose*ps*) echo app ;;\n"
+        "  *) exit 0 ;;\n"
+        "esac\n"
+    )
+    (fake / "docker").chmod(0o755)
+    return fake
+
+
+def _busy_port() -> tuple[int, Any]:
+    import socket
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    sock.listen(1)
+    return sock.getsockname()[1], sock
+
+
+def test_preflight_fails_when_something_else_holds_the_port(tmp_path):
+    """コンテナが動いていても、掴み主が別プロセスなら止めること。"""
+    port, sock = _busy_port()
+    try:
+        fake = _fake_docker(tmp_path, ports="")     # biomni-app はポートを公開していない
+        proc = _run_preflight({
+            "PATH": f"{fake}:/usr/bin:/bin:/usr/sbin:/sbin",
+            "APP_PORT": str(port),
+        })
+    finally:
+        sock.close()
+
+    assert f"APP_PORT={port} は既に使われています" in proc.stdout
+    assert "bash scripts/start.sh" in proc.stdout, "Docker 無しの道を示すこと"
+    assert proc.returncode == 1
+
+
+def test_preflight_allows_a_port_held_by_our_own_container(tmp_path):
+    """自分のコンテナが掴んでいるだけなら、再ビルドできるので止めない。"""
+    port, sock = _busy_port()
+    try:
+        fake = _fake_docker(tmp_path, ports=f"0.0.0.0:{port}->8000/tcp")
+        proc = _run_preflight({
+            "PATH": f"{fake}:/usr/bin:/bin:/usr/sbin:/sbin",
+            "APP_PORT": str(port),
+        })
+    finally:
+        sock.close()
+
+    assert f"APP_PORT={port} は使えます" in proc.stdout
