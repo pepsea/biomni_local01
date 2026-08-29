@@ -438,6 +438,12 @@ def _preload_tools(agent: Any) -> list[str]:
             if func is not None:
                 namespace[name] = func
                 loaded.append(name)
+    # どれを読み込んだかを LLM 側の助言に渡す。
+    # 「無いから諦めろ」と「あるから import をやめろ」は正反対なので、
+    # 推測ではなく実際に読み込んだ集合で判断させる
+    from biomni_hypo import llm as llm_module
+
+    llm_module.PRELOADED_TOOLS.update(loaded)
     log.info("実行環境に %d 個のツールを読み込みました", len(loaded))
     return loaded
 

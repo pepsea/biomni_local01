@@ -82,3 +82,54 @@ print(callable(query_pubmed))   -> True
 **一覧に載せたものは、その場で使えなければなりません。**
 「載っているが使えない」は、モデルにとって最も高くつく状態です。
 人間なら諦めますが、モデルは延々と別の呼び方を試します。
+
+---
+
+## 付記: 読み込んでも import は書かれる
+
+事前読み込みを入れた後も、こう出ました。
+
+```
+Error: cannot import name 'query_pubmed' from 'biomni.tool.database'
+```
+
+**名前空間に入れても、モデルが import 文を書けば失敗します。**
+`query_pubmed` は `literature` にあるので、`database` からは import できません。
+呼べる状態にすることと、呼び方を変えさせることは別の仕事でした。
+
+3 つ足しました。
+
+### 1. エラーの形をもう 1 つ拾う
+
+`cannot import name 'X' from 'Y'` は、`name 'X' is not defined` とも
+`module has no attribute` とも違う形です。拾っていませんでした。
+
+### 2. 「無い」と「あるのに import した」を言い分ける
+
+助言が正反対になるので、**実際に読み込んだ集合**（`PRELOADED_TOOLS`）を
+見て決めます。推測で書き分けると必ずどちらかを間違えます。
+
+```
+読み込み済み → [tool] `query_pubmed` is ALREADY loaded. Do not import it.
+                Call it directly: `result = query_pubmed(...)` then `print(result)`.
+未読み込み   → [tool] `query_pubmed` is not available in this environment. …
+```
+
+### 3. プロンプトの規則にする
+
+観測が出てから直させるのは後手です。最初から書かせないようにします。
+
+```
+- 一覧にあるツールは既に読み込み済みで、名前だけで呼べる。
+  ツールを import してはいけない（`from biomni.tool... import ...` も
+  `import biomni...` も書かないこと）。`result = query_uniprot(...)` と直接呼ぶ。
+  名前が未定義なら、その環境には無い。別のツールに切り替えること。
+```
+
+英語側の規則にも同じものを入れています。
+
+## 教訓（追記）
+
+**「呼べるようにする」と「呼び方を変えさせる」は別の仕事です。**
+環境を直しただけでは、モデルは前と同じコードを書きます。
+環境・観測への助言・プロンプトの規則、3 つとも要ります。

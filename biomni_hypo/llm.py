@@ -371,6 +371,20 @@ def _tool_parameters(name: str) -> list[str]:
 #: `name 'query_pubmed' is not defined` / `module 'x' has no attribute 'y'`
 _UNDEFINED = re.compile(r"name ['\"](\w+)['\"] is not defined")
 _NO_ATTR = re.compile(r"module ['\"][\w.]+['\"] has no attribute ['\"](\w+)['\"]")
+#: `cannot import name 'query_pubmed' from 'biomni.tool.database'`
+#: モデルは import を書きたがる。読み込み済みでもこの形で失敗する
+_CANNOT_IMPORT = re.compile(r"cannot import name ['\"](\w+)['\"]")
+
+#: 実行環境に読み込み済みのツール名。agent_factory._preload_tools が入れる。
+#: 「無いから諦めろ」と「あるから import をやめろ」は助言が正反対なので、
+#: 実際に読み込んだ集合を見て言い分ける
+PRELOADED_TOOLS: set[str] = set()
+
+#: 読み込み済みなのに import しようとした場合
+IMPORTED_NUDGE = (
+    "[tool] `{name}` is ALREADY loaded. Do not import it. "
+    "Call it directly in <execute>: `result = {name}(...)` then `print(result)`."
+)
 
 #: 使えないツールを呼び続けるのを止める。何が使えるかまで言うこと。
 UNAVAILABLE_NUDGE = (
@@ -388,10 +402,15 @@ def _unavailable_hint(text: str) -> str:
     失敗し、を 28 ステップ繰り返して <solution> に到達しなかった。
     「無い」と言うだけでなく「import は要らない」まで言うこと。
     """
-    for pattern in (_UNDEFINED, _NO_ATTR):
+    for pattern in (_CANNOT_IMPORT, _UNDEFINED, _NO_ATTR):
         match = pattern.search(text or "")
-        if match:
-            return UNAVAILABLE_NUDGE.format(name=match.group(1))
+        if not match:
+            continue
+        name = match.group(1)
+        # 読み込み済みなら「無い」ではない。import をやめさせるのが正解
+        if name in PRELOADED_TOOLS:
+            return IMPORTED_NUDGE.format(name=name)
+        return UNAVAILABLE_NUDGE.format(name=name)
     return ""
 
 

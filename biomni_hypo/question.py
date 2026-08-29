@@ -372,6 +372,10 @@ Rules:
   a hypothesis supported by only one query is weak, however clean that query looked.
 - Do not stop at the first plausible answer. Check whether it also holds in a
   second, different kind of data.
+- Every tool listed for you is ALREADY loaded and callable by its bare name.
+  NEVER write an import statement for a tool (no `from biomni.tool... import ...`,
+  no `import biomni...`). Just call it: `result = query_uniprot(...)`.
+  If a tool name is not defined, it is unavailable here - switch to another tool.
 """.strip()
     + "\n\n"
     + _FORMAT_REMINDER
@@ -388,6 +392,10 @@ _JA_RULES = (
   1 回のクエリしか支えが無い仮説は、そのクエリがどれだけ綺麗でも弱い。
 - 最初にもっともらしい答えが出ても、そこで止めないこと。
   種類の違うデータでも成り立つかを確かめること。
+- 一覧にあるツールは既に読み込み済みで、名前だけで呼べる。
+  ツールを import してはいけない（`from biomni.tool... import ...` も
+  `import biomni...` も書かないこと）。`result = query_uniprot(...)` と直接呼ぶ。
+  名前が未定義なら、その環境には無い。別のツールに切り替えること。
 """.strip()
     + "\n\n"
     + _FORMAT_REMINDER

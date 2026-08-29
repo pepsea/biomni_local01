@@ -295,3 +295,25 @@ def test_a_normal_observation_gets_no_unavailable_hint():
     from biomni_hypo.llm import _unavailable_hint
 
     assert _unavailable_hint("BRCA1 に 12 件ヒットしました") == ""
+
+
+def test_an_import_of_a_loaded_tool_is_told_to_stop_importing():
+    """読み込み済みなら「無い」ではない。import をやめさせるのが正解。
+
+    実測: cannot import name 'query_pubmed' from 'biomni.tool.database'。
+    事前読み込みしても、モデルが import を書く限り失敗する。
+    """
+    import biomni_hypo.llm as llm_module
+
+    err = "Error: cannot import name 'query_pubmed' from 'biomni.tool.database'"
+    llm_module.PRELOADED_TOOLS.discard("query_pubmed")
+    assert "is not available" in llm_module._unavailable_hint(err)
+
+    llm_module.PRELOADED_TOOLS.add("query_pubmed")
+    try:
+        hint = llm_module._unavailable_hint(err)
+        assert "ALREADY loaded" in hint
+        assert "Do not import it" in hint
+        assert "result = query_pubmed(...)" in hint
+    finally:
+        llm_module.PRELOADED_TOOLS.discard("query_pubmed")

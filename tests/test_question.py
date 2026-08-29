@@ -227,3 +227,17 @@ def test_a_round_trip_produces_the_same_prompt():
 def test_plain_strings_still_work():
     q = coerce_question("BRCA1 と乳がんの関係")
     assert q.text == "BRCA1 と乳がんの関係"
+
+
+def test_the_prompt_forbids_importing_tools():
+    """ツールは読み込み済み。import を書かせないこと。
+
+    実測: from biomni.tool.database import query_pubmed を繰り返して
+    28 ステップを失った（docs/design/38）。
+    """
+    q = ResearchQuestion.from_text("TNBC で PARP 阻害剤耐性を規定する因子は？")
+    for language in ("ja", "en"):
+        prompt = q.to_prompt(language)
+        assert "import" in prompt, language
+        low = prompt.lower()
+        assert "do not" in low or "してはいけない" in prompt, language
