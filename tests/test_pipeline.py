@@ -407,3 +407,21 @@ def test_the_report_carries_the_caveat(monkeypatch):
     r = _run_with_trace(monkeypatch, BROKEN_CALLS,
                         extraction={"answer": "データが取得できなかった", "hypotheses": []})
     assert r.extra["evidence_gap_caveat"] in to_markdown(r)
+
+
+def test_the_report_links_identifiers(result):
+    """レポートの識別子は、そのまま踏めること。"""
+    md = to_markdown(result)
+    linked = [line for line in md.splitlines() if "](http" in line]
+    assert linked, "リンクが 1 つも無い"
+
+
+def test_identifiers_without_a_url_are_left_plain():
+    from biomni_hypo.report import _linked
+    from biomni_hypo.schemas import Evidence, ResourceKind
+
+    with_url = Evidence(eid="e1", kind=ResourceKind.LITERATURE, identifier="PMID:1",
+                        url="https://pubmed.ncbi.nlm.nih.gov/1/")
+    without = Evidence(eid="e2", kind=ResourceKind.DB_RECORD, identifier="X-1")
+    assert _linked(with_url) == "[PMID:1](https://pubmed.ncbi.nlm.nih.gov/1/)"
+    assert _linked(without) == "X-1"

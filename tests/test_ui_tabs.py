@@ -271,3 +271,28 @@ def test_models_that_are_not_installed_are_never_named(html):
     empty_case = html[html.index("使えるモデルが 1 つもありません") :]
     empty_case = empty_case[: empty_case.index("$(\"hints\").innerHTML +=")]
     assert "ollama pull qwen3:14b" in empty_case
+
+
+def test_evidence_chips_carry_an_external_link(html):
+    """識別子から一次情報へ、その場で飛べること。
+
+    根拠を示すとは、識別子を書くことではなく、辿れるようにすること
+    （docs/design/03）。
+    """
+    assert "chiplink" in html
+    assert 'target="_blank"' in html and 'rel="noopener"' in html
+
+    chips = html[html.index("function chips(") :]
+    chips = chips[: chips.index("\n}")]
+    assert "e.url" in chips, "URL を使っていない"
+    # ボタンの中に <a> を入れない（入れ子の操作要素になる）
+    button = chips[chips.index("<button class=\"chip") : chips.index("</button>")]
+    assert "<a " not in button, "ボタンの中にリンクを入れている"
+
+
+def test_the_sources_tab_lists_records_with_links(html):
+    sources = html[html.index('$("tab-sources").innerHTML') :]
+    sources = sources[: sources.index("// --- トレース")]
+    assert "引用した文献・DB レコード" in sources
+    assert "開く ↗" in sources, "一覧から開けない"
+    assert "リンクなし" in sources, "URL が無い場合の表示が無い"

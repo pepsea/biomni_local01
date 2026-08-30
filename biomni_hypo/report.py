@@ -199,7 +199,7 @@ def _reasoning_lines(r: RunResult) -> list[str]:
                 lines.append(f"   - 分かったこと: {pt.finding}")
             if pt.evidence:
                 refs = ", ".join(
-                    f"{e.identifier} {_STATUS_MARK.get(e.verification_status, '?')}"
+                    f"{_linked(e)} {_STATUS_MARK.get(e.verification_status, '?')}"
                     for e in pt.evidence
                 )
                 lines.append(f"   - 根拠: {refs}")
@@ -288,7 +288,7 @@ def _verification_section(r: RunResult) -> str:
         lines += ["", "### 検証に失敗した引用", "", "| 識別子 | 種別 | 理由 | ステップ |", "| --- | --- | --- | --- |"]
         for f in r.failed_citations:
             lines.append(
-                f"| {f.identifier} | {_KIND_LABEL.get(f.kind, f.kind.value)} | {f.reason} | {f.step_idx} |"
+                f"| {_linked(f)} | {_KIND_LABEL.get(f.kind, f.kind.value)} | {f.reason} | {f.step_idx} |"
             )
     return "\n".join(lines)
 
@@ -306,10 +306,22 @@ def _licenses_section(r: RunResult) -> str:
         mark = "⚠️ 要確認" if res.review_required else ("✅" if res.commercial_ok else "❌")
         steps = ", ".join(str(i) for i in res.step_idxs) or "-"
         lines.append(
-            f"| {res.name} | {_KIND_LABEL.get(res.kind, res.kind.value)} | {res.license} | "
+            f"| {f'[{res.name}]({res.url})' if res.url else res.name} | "
+            f"{_KIND_LABEL.get(res.kind, res.kind.value)} | {res.license} | "
             f"{res.attribution or '-'} | {mark} | {steps} |"
         )
     return "\n".join(lines)
+
+
+def _linked(ev: object) -> str:
+    """識別子を Markdown のリンクにする。URL が無ければそのまま。
+
+    レポートを読んだ人が、その場で一次情報へ飛べること（docs/design/03）。
+    識別子だけ書いて「あとは検索してください」では、根拠を示したことにならない。
+    """
+    identifier = getattr(ev, "identifier", "") or ""
+    url = getattr(ev, "url", "") or ""
+    return f"[{identifier}]({url})" if url else identifier
 
 
 def _trace_section(r: RunResult) -> str:

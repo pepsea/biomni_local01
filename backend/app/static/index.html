@@ -57,6 +57,9 @@
   .msg { padding:7px 9px; border-radius:6px; font-size:12.5px; margin:7px 0; border:1px solid var(--line);
          white-space:pre-wrap; overflow-x:auto; }   /* traceback を折り返して見せる */
   .msg.error { color:var(--err); border-color:var(--err); }
+  .chipwrap { display:inline-flex; align-items:center; gap:2px; }
+  .chiplink { text-decoration:none; color:var(--accent); font-size:12px; padding:0 3px; }
+  .chiplink:hover { text-decoration:underline; }
   .msg.warning { color:var(--warn); border-color:var(--warn); }
   .msg.info { color:var(--muted); }
   pre { background:var(--card); border:1px solid var(--line); border-radius:6px; padding:9px;
@@ -658,12 +661,25 @@ async function showResult(id) {
   $("tab-sources").innerHTML = `
     <h2>実際に使用したデータ・ツール</h2>
     <table><thead><tr><th>リソース</th><th>種別</th><th>ライセンス</th><th>帰属</th><th>ステップ</th></tr></thead><tbody>
-    ${(r.resources_used||[]).map(x => `<tr><td>${esc(x.name)}</td><td>${esc(x.kind)}</td>
+    ${(r.resources_used||[]).map(x => `<tr><td>${x.url
+        ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.name)} ↗</a>`
+        : esc(x.name)}</td><td>${esc(x.kind)}</td>
       <td>${esc(x.license)}${x.review_required?' <span style="color:var(--warn)">⚠️要確認</span>':""}</td>
       <td>${esc(x.attribution||"-")}</td><td>${x.step_idxs.join(", ")||"-"}</td></tr>`).join("")}
     </tbody></table>
     <h2>引用した文献・DB レコード（${Object.keys(cited).length} 件）</h2>
     ${chips(Object.values(cited)) || '<p class="empty">なし</p>'}
+    ${Object.keys(cited).length ? `<table><thead><tr>
+      <th>識別子</th><th>種別</th><th>検証</th><th>ステップ</th><th>リンク</th></tr></thead><tbody>` +
+      Object.values(cited).map(e => `<tr>
+        <td>${e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.identifier)}</a>`
+                    : esc(e.identifier)}</td>
+        <td>${esc(e.kind)}</td>
+        <td>${esc(e.verification_status || "-")}</td>
+        <td>${e.step_idx >= 0 ? e.step_idx : "-"}</td>
+        <td>${e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener">開く ↗</a>`
+                    : '<span class="empty">リンクなし</span>'}</td>
+      </tr>`).join("") + `</tbody></table>` : ""}
     ${(r.failed_citations||[]).length ? `<h2>検証に失敗した引用</h2><table><tbody>${
       r.failed_citations.map(f=>`<tr><td>${esc(f.identifier)}</td><td>${esc(f.reason)}</td></tr>`).join("")}</tbody></table>` : ""}`;
 
@@ -739,10 +755,15 @@ function reasoningBlock(points, uncertainties, reason) {
 
 function chips(list) {
   if (!list || !list.length) return "";
-  return `<div class="chips">` + list.map((e,i) => {
+  return `<div class="chips">` + list.map(e => {
     const cls = e.stance === "refutes" ? "refutes" : (e.verification_status || "");
     const mark = {verified:"✓", not_applicable:"−", unverified:"?", failed:"✕"}[e.verification_status] || "";
-    return `<button class="chip ${cls}" data-ev='${esc(JSON.stringify(e))}'>${mark} ${esc(e.identifier)}${e.stance==="refutes"?" · 反証":""}</button>`;
+    // 外部リンクはボタンの外に置く。ボタンの中に <a> を入れると入れ子の操作要素になり、
+    // どちらが押されたのか分からなくなる
+    const link = e.url
+      ? `<a class="chiplink" href="${esc(e.url)}" target="_blank" rel="noopener"
+            title="${esc(e.url)}">↗</a>` : "";
+    return `<span class="chipwrap"><button class="chip ${cls}" data-ev='${esc(JSON.stringify(e))}'>${mark} ${esc(e.identifier)}${e.stance==="refutes"?" · 反証":""}</button>${link}</span>`;
   }).join("") + `</div>`;
 }
 
