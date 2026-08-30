@@ -281,3 +281,10 @@ def test_the_prompt_asks_for_flat_code():
     q = ResearchQuestion.from_text("TNBC で PARP 阻害剤耐性を規定する因子は？")
     assert "平らに書く" in q.to_prompt("ja")
     assert "FLAT code" in q.to_prompt("en")
+
+
+def test_the_prompt_forbids_concluding_absence_from_a_failed_call():
+    """呼び出しの失敗を「データが無い」の根拠にさせないこと。"""
+    q = ResearchQuestion.from_text("TNBC で PARP 阻害剤耐性を規定する因子は？")
+    assert "根拠にならない" in q.to_prompt("ja")
+    assert "NOT evidence of absence" in q.to_prompt("en")

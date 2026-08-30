@@ -119,6 +119,16 @@ def run_hypothesis(
             "docs/design/04 §4.1 の LLM 差し替えが効いているか確認してください。",
             trace.hallucinated_observations,
         )
+    if trace.client_errors:
+        # 「呼び出しが失敗した」を「データが無い」と結論させてはいけない。
+        # 実測: UniProt の失敗は API 障害ではなく slice の書き間違いだったのに、
+        # 「明確な根拠は得られなかった」と結論した（docs/design/42）
+        result.extra["client_errors"] = trace.client_errors
+        log.warning(
+            "実行コード側の誤りで %d 件の観測が失敗しました。"
+            "根拠が無いことの理由にはなりません。",
+            trace.client_errors,
+        )
     if trace.parsing_errors:
         # モデルが <execute>/<solution> を出せていない。探索そのものが進んでいない
         # 可能性が高いので、結果と一緒に必ず出す（docs/design/16 §16.2）。
@@ -177,6 +187,15 @@ def run_hypothesis(
         # 「回答が得られませんでした」だけでは打つ手が無い。分かっていることを言う。
         result.extra["answer_missing_reason"] = _why_no_answer(result, trace, extraction)
 
+    if trace.client_errors and _claims_a_gap(result.answer):
+        # 結論が「取れなかった」と言っているのに、失敗の中身がこちらの誤り。
+        # そのまま出すと、読んだ人は「その DB にデータが無い」と受け取る
+        result.extra["evidence_gap_caveat"] = (
+            f"この結論の「取得できなかった」は、外部データベースの不在ではなく、"
+            f"実行したコードの誤り（{trace.client_errors} 件）による失敗です。"
+            f"データが無いことの根拠にはなりません。実行トレースを確認してください。"
+        )
+
     if not result.answer_reasoning and result.answer:
         # 結論はあるのに論点が無い＝biomni 既定の「短い答え」に戻っている状態
         # （docs/design/18 §18.1）。黙って結論だけ出さず、必ず旗を立てる。
@@ -206,6 +225,20 @@ def run_hypothesis(
 
 #: think から結論を拾うときの最低の長さ。これ未満は相槌とみなす
 _MIN_PROSE = 40
+
+
+#: 「取れなかったから分からない」と読める言い回し。日英とも拾う
+_GAP_PHRASES = (
+    "取得できな", "得られなかった", "入手できな", "アクセスが失敗", "失敗しており",
+    "could not retrieve", "could not be retrieved", "unable to obtain",
+    "no data was available", "failed to access", "api error",
+)
+
+
+def _claims_a_gap(answer: str) -> bool:
+    """結論が「データを取れなかった」ことを理由にしているか。"""
+    low = (answer or "").lower()
+    return any(p in answer or p in low for p in _GAP_PHRASES)
 
 
 def _last_prose(steps: list[Step]) -> str:

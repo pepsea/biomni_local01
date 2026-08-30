@@ -621,6 +621,8 @@ async function showResult(id) {
   $("tab-answer").innerHTML = `
     <h2>回答</h2>
     <div class="answer">${esc(r.answer) || '<span class="empty">回答が得られませんでした。</span>'}</div>
+    ${r.extra?.evidence_gap_caveat
+        ? `<div class="msg error">❌ ${esc(r.extra.evidence_gap_caveat)}</div>` : ""}
     ${r.extra?.answer_missing_reason
         ? `<div class="msg warning">⚠️ ${esc(r.extra.answer_missing_reason)}</div>` : ""}
     ${r.extra?.answer_is_unstructured

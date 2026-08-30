@@ -348,3 +348,18 @@ def test_the_hint_does_not_claim_biomni_stops():
 
     assert "2 回まで差し戻し" not in PARSE_ERROR_HINT
     assert "num_ctx" in PARSE_ERROR_HINT
+
+
+def test_client_errors_are_told_apart_from_external_failures():
+    """外部の障害と、こちらのコードの誤りを混ぜないこと。"""
+    from biomni_hypo.tracing import is_client_error
+
+    assert is_client_error("Error: unhashable type: 'slice'")
+    assert is_client_error("Error: 'results'")
+    assert is_client_error("Error: expected an indented block after 'if' statement")
+    assert is_client_error("Error: name 'query_pubmed' is not defined")
+
+    assert not is_client_error("Error: API error: 500 Server Error")
+    assert not is_client_error("Error: Connection timed out")
+    assert not is_client_error("Title: 何かの論文")
+    assert not is_client_error("")

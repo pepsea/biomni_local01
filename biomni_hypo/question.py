@@ -383,6 +383,9 @@ Rules:
 - Write FLAT code: no `if`, no `for`, no `try` inside <execute>. One statement
   per line. Because `print(str(r)[:800])` works for every type, you never need
   an isinstance check - and indented blocks are where the code breaks.
+- A failed tool call is NOT evidence of absence. If a query errored, say that the
+  query errored - never write that the data does not exist or that no evidence
+  was found. Fix the call or use another database first.
 """.strip()
     + "\n\n"
     + _FORMAT_REMINDER
@@ -410,6 +413,9 @@ _JA_RULES = (
 - <execute> の中は平らに書くこと。`if`・`for`・`try` を使わない。1 行 1 文。
   `print(str(r)[:800])` はどの型でも通るので型の判定は要らない。
   インデントのあるブロックが、いちばん壊れるところ。
+- 呼び出しが失敗したことは、「データが無い」ことの根拠にならない。
+  クエリが失敗したなら「クエリが失敗した」と書くこと。「根拠が得られなかった」
+  「データが存在しない」と書いてはいけない。まず直すか、別の DB を当たること。
 """.strip()
     + "\n\n"
     + _FORMAT_REMINDER

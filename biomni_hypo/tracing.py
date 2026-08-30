@@ -25,6 +25,36 @@ from biomni_hypo.schemas import Artifact, PlanItem, Step, StepKind, ToolCall
 log = logging.getLogger(__name__)
 
 EXECUTE_RE = re.compile(r"<execute>(.*?)</execute>", re.DOTALL)
+#: 観測が「こちらの書いたコードの誤り」であることを示す形。
+#: 外部 API の障害と混ぜてはいけない。混ぜると「データが無い」と
+#: 結論してしまう（実測で踏んだ: docs/design/42）
+CLIENT_ERROR_MARKS = (
+    "unhashable type",
+    "indices must be integers",
+    "is not defined",
+    "unexpected keyword argument",
+    "cannot import name",
+    "expected an indented block",
+    "IndentationError",
+    "SyntaxError",
+    "invalid syntax",
+    "has no attribute",
+    "object is not subscriptable",
+    "object is not iterable",
+)
+
+
+def is_client_error(observation: str) -> bool:
+    """その観測は、外部の失敗ではなく、こちらのコードの誤りか。"""
+    text = observation or ""
+    if not text.lstrip().startswith("Error:"):
+        return False
+    if any(mark in text for mark in CLIENT_ERROR_MARKS):
+        return True
+    # 素の KeyError（`Error: 'results'` だけ）もこちら側の誤り
+    return bool(re.match(r"^Error:\s*'[^']{1,60}'\s*$", text.strip()))
+
+
 OBSERVATION_RE = re.compile(r"<observation>(.*?)</observation>", re.DOTALL)
 SOLUTION_RE = re.compile(r"<solution>(.*?)</solution>", re.DOTALL)
 #: コード中のデータファイル参照
@@ -88,6 +118,8 @@ class TraceResult:
     stopped_reason: str = ""
     #: LLM の生出力に <observation> が現れた回数。0 でなければ stop が効いていない（AC-1）
     hallucinated_observations: int = 0
+    #: 実行したコード側の誤りで失敗した観測の数。外部の障害と分けて数える
+    client_errors: int = 0
     #: biomni がタグ無し応答を差し戻した回数
     parsing_errors: int = 0
     #: 実況で流したトークン数
@@ -121,6 +153,7 @@ class TracingRunner:
         self.plan_revisions = 0
         self.stopped_reason = ""
         self.hallucinated_observations = 0
+        self.client_errors = 0
         self.parsing_errors = 0
         self.consecutive_parse_errors = 0
         self.streamed_tokens = 0
@@ -222,6 +255,7 @@ class TracingRunner:
             plan_revisions=self.plan_revisions,
             stopped_reason=self.stopped_reason,
             hallucinated_observations=self.hallucinated_observations,
+            client_errors=self.client_errors,
             parsing_errors=self.parsing_errors,
             streamed_tokens=self.streamed_tokens,
         )
@@ -257,6 +291,8 @@ class TracingRunner:
         if obs and not exe:
             observation = obs.group(1).strip()
             blocked = observation.startswith("POLICY BLOCKED")
+            if is_client_error(observation):
+                self.client_errors += 1
             prev_tools = self.steps[-1].tools if self.steps else []
             citations = extract_citations(observation, step_idx=idx, tools_in_step=prev_tools)
             out.append(

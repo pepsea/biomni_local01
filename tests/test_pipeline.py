@@ -364,3 +364,46 @@ def test_a_normal_run_gets_no_missing_reason(result):
     assert result.answer
     assert "answer_missing_reason" not in result.extra
     assert "answer_from" not in result.extra
+
+
+# --------------------------- 「呼び出しが失敗した」を「データが無い」にしない
+# 実測: UniProt の失敗は API 障害ではなく slice の書き間違いだったのに、
+# 結論は「明確な根拠は得られなかった」だった。読んだ人は
+# 「その DB にデータが無い」と受け取る。
+
+
+BROKEN_CALLS = [
+    "調べます。",
+    "<execute>print(r[:800])</execute>",
+    "<observation>Error: unhashable type: 'slice'</observation>",
+    "<execute>print(r['results'])</execute>",
+    "<observation>Error: 'results'</observation>",
+    "<solution>UniProt へのアクセスが失敗しており、"
+    "FGFR1 の機能情報が取得できなかった。明確な根拠は得られなかった。</solution>",
+]
+
+
+def test_client_errors_are_counted_separately(monkeypatch):
+    r = _run_with_trace(monkeypatch, BROKEN_CALLS,
+                        extraction={"answer": "根拠は得られなかった", "hypotheses": []})
+    assert r.extra["client_errors"] >= 2, r.extra
+
+
+def test_a_gap_claim_built_on_our_own_bugs_is_flagged(monkeypatch):
+    r = _run_with_trace(monkeypatch, BROKEN_CALLS,
+                        extraction={"answer": "UniProt へのアクセスが失敗しており、"
+                                              "データが入手できなかった", "hypotheses": []})
+    caveat = r.extra["evidence_gap_caveat"]
+    assert "実行したコードの誤り" in caveat
+    assert "データが無いことの根拠にはなりません" in caveat
+
+
+def test_a_normal_answer_is_not_flagged(result):
+    """普通に答えが出たランに、この注意書きを付けないこと。"""
+    assert "evidence_gap_caveat" not in result.extra
+
+
+def test_the_report_carries_the_caveat(monkeypatch):
+    r = _run_with_trace(monkeypatch, BROKEN_CALLS,
+                        extraction={"answer": "データが取得できなかった", "hypotheses": []})
+    assert r.extra["evidence_gap_caveat"] in to_markdown(r)

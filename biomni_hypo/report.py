@@ -155,6 +155,9 @@ def _answer_section(r: RunResult) -> str:
         return ""
     lines = ["## 回答", "", r.answer or "（回答が得られませんでした）", ""]
     # 空の回答をそのまま載せない。分かっている理由を必ず添える
+    caveat = (r.extra or {}).get("evidence_gap_caveat", "")
+    if caveat:
+        lines += [f"> ❌ {caveat}", ""]
     why = (r.extra or {}).get("answer_missing_reason", "")
     if why:
         lines += [f"> ⚠️ {why}", ""]
