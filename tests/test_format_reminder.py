@@ -400,3 +400,31 @@ def test_every_alternative_is_a_real_tool():
     real = {a["name"] for apis in read_module2api().values() for a in apis}
     listed = set(_ALTERNATIVES) | {t for v in _ALTERNATIVES.values() for t in v}
     assert not (listed - real), f"存在しないツール名: {sorted(listed - real)}"
+
+
+# ------------------------------------------------ 丸ごと print させない
+# 実測: UniProt の結果をそのまま print して 10K で切り詰められた。
+# 1 回で文脈の数千トークンを失い、得られる情報はほとんど無い。
+
+
+def test_a_truncated_observation_teaches_what_to_print():
+    from biomni_hypo.llm import _api_error_hint
+
+    hint = _api_error_hint(
+        "The output is too long to be added to context. "
+        "Here are the first 10K characters...\n{...}"
+    )
+    assert "Never print a whole API result" in hint
+    assert "print(list(r.keys())" in hint, "何を print すべきかまで書く"
+    assert "Do not re-run the same query" in hint, "見たさに再実行させない"
+
+
+def test_the_truncation_hint_wins_over_the_generic_one():
+    """切り詰めは「API が失敗した」より具体的な助言があるので、そちらを出す。"""
+    from biomni_hypo.llm import _api_error_hint
+
+    both = (
+        "The output is too long to be added to context. "
+        "Here are the first 10K characters...{'success': False}"
+    )
+    assert "[context]" in _api_error_hint(both)

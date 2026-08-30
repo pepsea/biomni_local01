@@ -241,3 +241,12 @@ def test_the_prompt_forbids_importing_tools():
         assert "import" in prompt, language
         low = prompt.lower()
         assert "do not" in low or "してはいけない" in prompt, language
+
+
+def test_the_prompt_discourages_printing_whole_results():
+    """丸ごと print は文脈を食い潰す。最初から避けさせる。"""
+    q = ResearchQuestion.from_text("TNBC で PARP 阻害剤耐性を規定する因子は？")
+    for language in ("ja", "en"):
+        prompt = q.to_prompt(language)
+        assert "print(" in prompt, language
+        assert ("丸ごと" in prompt) or ("whole result" in prompt), language

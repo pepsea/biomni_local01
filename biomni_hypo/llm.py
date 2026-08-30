@@ -441,6 +441,8 @@ TOOL_ERROR_NUDGE = (
 def _api_error_hint(text: str) -> str:
     """外部 API がエラーを返したときに、次の一手を具体的にする。"""
     text = text or ""
+    if _TRUNCATED in text:
+        return TOO_LONG_NUDGE
     bad = _INVALID_FIELDS.findall(text)
     if bad:
         return UNIPROT_FIELD_NUDGE.format(bad=", ".join(dict.fromkeys(bad)))
@@ -501,6 +503,19 @@ def _alternative_hint(text: str) -> str:
         f"{', '.join(others)}. Try one of them before concluding that the data "
         f"is unavailable. Only report a gap if every alternative also failed."
     )
+
+
+#: biomni が出す切り詰めの断り書き。ここに至った時点で文脈を数千トークン失う
+_TRUNCATED = "output is too long to be added to context"
+
+#: 丸ごと print させない。何を print すべきかまで書くこと
+TOO_LONG_NUDGE = (
+    "[context] That output was truncated - it cost thousands of tokens and gave "
+    "little. Never print a whole API result. Assign it to a variable, then print "
+    "ONLY what you need: `print(type(r), len(r))`, `print(list(r.keys())[:20])`, "
+    "`print(r['results'][0])`, or `print(str(r)[:800])`. "
+    "Do not re-run the same query just to see more of it."
+)
 
 
 class FormatReminderLLM:

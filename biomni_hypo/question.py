@@ -376,6 +376,9 @@ Rules:
   NEVER write an import statement for a tool (no `from biomni.tool... import ...`,
   no `import biomni...`). Just call it: `result = query_uniprot(...)`.
   If a tool name is not defined, it is unavailable here - switch to another tool.
+- NEVER print a whole result object. Assign it to a variable and print only what
+  you need (`print(list(r.keys()))`, `print(r['results'][0])`, `print(str(r)[:800])`).
+  A truncated observation costs thousands of tokens and tells you almost nothing.
 """.strip()
     + "\n\n"
     + _FORMAT_REMINDER
@@ -396,6 +399,9 @@ _JA_RULES = (
   ツールを import してはいけない（`from biomni.tool... import ...` も
   `import biomni...` も書かないこと）。`result = query_uniprot(...)` と直接呼ぶ。
   名前が未定義なら、その環境には無い。別のツールに切り替えること。
+- 結果を丸ごと print しないこと。変数に受けて、必要な部分だけ出す
+  （`print(list(r.keys()))`、`print(r['results'][0])`、`print(str(r)[:800])`）。
+  切り詰められた観測は数千トークンを食う割に、ほとんど何も分からない。
 """.strip()
     + "\n\n"
     + _FORMAT_REMINDER
