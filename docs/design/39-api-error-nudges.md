@@ -69,3 +69,46 @@ query=gene_exact:IHH+AND+organism_id:9606  ← 正しくは +AND+
 ツールを呼べるようにする（§38）→ 呼び方を直させる（§38 付記）→
 **呼んだ先のエラーから次の一手を出す（ここ）**。
 どれが欠けても、モデルは同じところで足踏みします。
+
+---
+
+## 落ちた情報源の代わりを名指しする
+
+```
+Monarch Initiative の API エラーにより、FGFR1 と骨粗鬆症の
+直接的な疾患関連性のデータが取得できなかった。
+```
+
+回答としては正直で、良い振る舞いです。ただ **穴を空けずに済んだはず**でした。
+遺伝子と疾患の関連は、Monarch だけの話ではありません。Open Targets、
+GWAS Catalog、ClinVar でも引けます。
+
+前節の助言は「別のツールか別のデータベースを使え」でした。これでは弱く、
+モデルは同じ DB を言い換えて叩き直すか、諦めます。
+**問いの種類ごとに、具体的な代わりを名指しします。**
+
+```
+[api] `query_monarch` failed. The SAME question can be asked elsewhere:
+      query_opentarget, query_gwas_catalog, query_clinvar, query_pubmed.
+      Try one of them before concluding that the data is unavailable.
+      Only report a gap if every alternative also failed.
+```
+
+対応表は問いの種類で切ってあります。
+
+| 問い | 代わり |
+|---|---|
+| 遺伝子 ↔ 疾患 | Open Targets / GWAS Catalog / ClinVar / PubMed |
+| タンパク質・構造 | Ensembl / InterPro / STRING / PDB / AlphaFold |
+| 経路・機能 | Reactome / QuickGO / STRING |
+| 薬剤 | ChEMBL / PubChem / UniChem |
+| 文献 | PubMed / arXiv |
+
+**挙げるのは実際に読み込まれているものだけ**です（`PRELOADED_TOOLS`）。
+入っていないツールを勧めれば、それを呼んで失敗して、また 1 ステップ
+捨てることになります。
+
+対応表に存在しないツール名を書いていないことは、biomni の実際のツール一覧と
+突き合わせるテストで縛っています。名前を思い出しで書くと必ず間違えます。
+
+「穴があった」と書いてよいのは、**代わりも全部試した後だけ**です。

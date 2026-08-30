@@ -445,8 +445,62 @@ def _api_error_hint(text: str) -> str:
     if bad:
         return UNIPROT_FIELD_NUDGE.format(bad=", ".join(dict.fromkeys(bad)))
     if "'success': False" in text or '"success": false' in text.lower():
-        return TOOL_ERROR_NUDGE
+        # 「別のツールを使え」だけでは同じ DB を言い換えるだけになる。
+        # 同じ問いを引ける先を名指しできるなら、そちらを優先する
+        return _alternative_hint(text) or TOOL_ERROR_NUDGE
     return ""
+
+
+#: 落ちたツールの代わりに、同じ問いを引ける先。
+#:
+#: 「別のツールを使え」だけでは、モデルは同じ DB を言い換えて叩き直す。
+#: 実測: Monarch が落ちたとき、FGFR1 と骨粗鬆症の関連を諦めて
+#: 「取得できなかった」と書いて終わった。同じ問いは Open Targets や
+#: GWAS Catalog でも引ける。**問いの種類ごとに**代わりを挙げること。
+_ALTERNATIVES: dict[str, tuple[str, ...]] = {
+    # 遺伝子と疾患の関連
+    "query_monarch": ("query_opentarget", "query_gwas_catalog", "query_clinvar", "query_pubmed"),
+    "query_opentarget": ("query_monarch", "query_gwas_catalog", "query_clinvar"),
+    "query_gwas_catalog": ("query_opentarget", "query_monarch"),
+    "query_clinvar": ("query_opentarget", "query_monarch", "query_dbsnp"),
+    # タンパク質・配列・構造
+    "query_uniprot": ("query_ensembl", "query_interpro", "query_stringdb", "query_pdb"),
+    "query_alphafold": ("query_pdb", "query_uniprot"),
+    "query_pdb": ("query_alphafold", "query_uniprot"),
+    # 経路・機能
+    "query_reactome": ("query_quickgo", "query_stringdb", "query_opentarget"),
+    "query_quickgo": ("query_reactome", "query_stringdb"),
+    "query_stringdb": ("query_reactome", "query_quickgo"),
+    # 薬剤
+    "query_chembl": ("query_pubchem", "query_opentarget", "query_drug_interactions"),
+    "query_pubchem": ("query_chembl", "query_unichem"),
+    # 文献
+    "query_pubmed": ("query_arxiv", "query_scholar"),
+    "query_arxiv": ("query_pubmed",),
+}
+
+#: どのツールが落ちたかを観測から拾う
+_FAILED_CALL = re.compile(r"(query_\w+)")
+
+
+def _alternative_hint(text: str) -> str:
+    """落ちたツールの代わりに、同じ問いを引ける先を挙げる。
+
+    挙げるのは **実際に読み込まれているもの** だけ。無いものを勧めると、
+    それを呼んで失敗して、また 1 ステップ捨てることになる。
+    """
+    failed = [n for n in dict.fromkeys(_FAILED_CALL.findall(text or "")) if n in _ALTERNATIVES]
+    if not failed:
+        return ""
+    name = failed[0]
+    others = [t for t in _ALTERNATIVES[name] if not PRELOADED_TOOLS or t in PRELOADED_TOOLS]
+    if not others:
+        return ""
+    return (
+        f"[api] `{name}` failed. The SAME question can be asked elsewhere: "
+        f"{', '.join(others)}. Try one of them before concluding that the data "
+        f"is unavailable. Only report a gap if every alternative also failed."
+    )
 
 
 class FormatReminderLLM:

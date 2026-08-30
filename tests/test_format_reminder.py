@@ -350,3 +350,53 @@ def test_a_successful_observation_gets_no_api_hint():
 
     assert _api_error_hint("PubMed Results: Title: BushenHuoxue formula ...") == ""
     assert _api_error_hint("{'success': True, 'data': [1, 2]}") == ""
+
+
+# --------------------------------- 落ちたツールの代わりを名指しする
+# 実測: Monarch が落ちたとき、FGFR1 と骨粗鬆症の関連を諦めて
+# 「取得できなかった」と書いて終わった。同じ問いは Open Targets でも引ける。
+
+
+def test_a_failed_source_names_alternatives():
+    import biomni_hypo.llm as llm_module
+
+    saved = set(llm_module.PRELOADED_TOOLS)
+    llm_module.PRELOADED_TOOLS.clear()
+    try:
+        hint = llm_module._api_error_hint(
+            "{'success': False, 'error': 'query_monarch API error: 500'}"
+        )
+        assert "query_opentarget" in hint
+        assert "Only report a gap if every alternative also failed" in hint
+    finally:
+        llm_module.PRELOADED_TOOLS.update(saved)
+
+
+def test_only_loaded_alternatives_are_suggested():
+    """無いツールを勧めないこと。勧めれば、それを呼んで 1 ステップ捨てる。"""
+    import biomni_hypo.llm as llm_module
+
+    saved = set(llm_module.PRELOADED_TOOLS)
+    llm_module.PRELOADED_TOOLS.clear()
+    llm_module.PRELOADED_TOOLS.add("query_opentarget")
+    try:
+        hint = llm_module._api_error_hint(
+            "{'success': False, 'error': 'query_monarch API error: 500'}"
+        )
+        assert "query_opentarget" in hint
+        assert "query_gwas_catalog" not in hint, "読み込んでいないものを勧めている"
+    finally:
+        llm_module.PRELOADED_TOOLS.clear()
+        llm_module.PRELOADED_TOOLS.update(saved)
+
+
+def test_every_alternative_is_a_real_tool():
+    """対応表に、存在しないツール名を書いていないこと。"""
+    pytest.importorskip("biomni", reason="biomni が無い環境ではスキップ")
+    from biomni.utils import read_module2api
+
+    from biomni_hypo.llm import _ALTERNATIVES
+
+    real = {a["name"] for apis in read_module2api().values() for a in apis}
+    listed = set(_ALTERNATIVES) | {t for v in _ALTERNATIVES.values() for t in v}
+    assert not (listed - real), f"存在しないツール名: {sorted(listed - real)}"
