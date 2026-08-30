@@ -379,6 +379,9 @@ Rules:
 - NEVER print a whole result object. Assign it to a variable and print only what
   you need (`print(list(r.keys()))`, `print(r['results'][0])`, `print(str(r)[:800])`).
   A truncated observation costs thousands of tokens and tells you almost nothing.
+- Tool results are not all dicts. Some are plain strings, some are DataFrames.
+  Run `print(type(r))` before indexing, or you will get
+  "string indices must be integers".
 """.strip()
     + "\n\n"
     + _FORMAT_REMINDER
@@ -402,6 +405,9 @@ _JA_RULES = (
 - 結果を丸ごと print しないこと。変数に受けて、必要な部分だけ出す
   （`print(list(r.keys()))`、`print(r['results'][0])`、`print(str(r)[:800])`）。
   切り詰められた観測は数千トークンを食う割に、ほとんど何も分からない。
+- ツールの返り値は辞書とは限らない。文字列のものも DataFrame のものもある。
+  添字で取り出す前に `print(type(r))` を見ること。見ないと
+  "string indices must be integers" になる。
 """.strip()
     + "\n\n"
     + _FORMAT_REMINDER

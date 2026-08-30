@@ -428,3 +428,50 @@ def test_the_truncation_hint_wins_over_the_generic_one():
         "Here are the first 10K characters...{'success': False}"
     )
     assert "[context]" in _api_error_hint(both)
+
+
+# ------------------------------------------- 返り値の型を辞書だと思い込む
+# 実測: query_pubmed は `-> str` と宣言されているのに、モデルは dict の
+# つもりで r['results'] と書いて "string indices must be integers" で落ちた。
+
+
+def test_a_string_result_indexed_as_a_dict_is_explained():
+    import biomni_hypo.llm as llm_module
+
+    llm_module.TOOL_RETURNS["query_pubmed"] = "str"
+    try:
+        hint = llm_module._return_type_hint(
+            "Error: string indices must be integers, not 'str'",
+            "<execute>r = query_pubmed(query='FGFR1 osteoporosis')\nprint(r['results'])</execute>",
+        )
+        assert "`query_pubmed` returns a plain `str`" in hint
+        assert "print(r[:800])" in hint
+        assert "print(type(r))" in hint
+    finally:
+        llm_module.TOOL_RETURNS.pop("query_pubmed", None)
+
+
+def test_an_unknown_tool_gets_the_general_form():
+    """型が分からないものに、型を断言しないこと。"""
+    from biomni_hypo.llm import _return_type_hint
+
+    hint = _return_type_hint("Error: string indices must be integers", "r = mystery()")
+    assert hint.startswith("[type] That tool"), hint
+
+
+def test_an_unrelated_error_gets_no_type_hint():
+    from biomni_hypo.llm import _return_type_hint
+
+    assert _return_type_hint("Error: connection timeout", "r = query_pubmed()") == ""
+
+
+def test_return_types_are_recorded_from_annotations():
+    """注釈がある場合だけ控えること（推測しない）。"""
+    pytest.importorskip("biomni", reason="biomni が無い環境ではスキップ")
+    import importlib
+
+    from biomni_hypo.agent_factory import _return_type_name
+
+    literature = importlib.import_module("biomni.tool.literature")
+    assert _return_type_name(literature.query_pubmed) == "str"
+    assert _return_type_name(lambda x: x) == "", "注釈が無ければ空"

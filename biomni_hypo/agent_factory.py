@@ -426,6 +426,7 @@ def _preload_tools(agent: Any) -> list[str]:
         return []
 
     loaded: list[str] = []
+    returns: list[tuple[str, str]] = []
     for module_name, apis in (agent.module2api or {}).items():
         try:
             module = importlib.import_module(module_name)
@@ -438,14 +439,29 @@ def _preload_tools(agent: Any) -> list[str]:
             if func is not None:
                 namespace[name] = func
                 loaded.append(name)
+                returns.append((name, _return_type_name(func)))
     # どれを読み込んだかを LLM 側の助言に渡す。
     # 「無いから諦めろ」と「あるから import をやめろ」は正反対なので、
     # 推測ではなく実際に読み込んだ集合で判断させる
     from biomni_hypo import llm as llm_module
 
     llm_module.PRELOADED_TOOLS.update(loaded)
+    llm_module.TOOL_RETURNS.update({n: t for n, t in returns if t})
     log.info("実行環境に %d 個のツールを読み込みました", len(loaded))
     return loaded
+
+
+def _return_type_name(func: Any) -> str:
+    """返り値の型名。注釈が無ければ空文字（推測しないこと）。"""
+    import inspect
+
+    try:
+        annotation = inspect.signature(func).return_annotation
+    except (TypeError, ValueError):
+        return ""
+    if annotation is inspect.Signature.empty:
+        return ""
+    return getattr(annotation, "__name__", "") or str(annotation)
 
 
 def _restrict_modules(agent: Any, tool_modules: tuple[str, ...] | None) -> list[str]:

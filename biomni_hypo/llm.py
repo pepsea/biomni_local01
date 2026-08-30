@@ -518,6 +518,34 @@ TOO_LONG_NUDGE = (
 )
 
 
+#: ツール名 -> 返り値の型名。agent_factory._preload_tools が入れる。
+#: 注釈があるものだけ。無ければ黙る（推測で型を言うと別の間違いを誘発する）
+TOOL_RETURNS: dict[str, str] = {}
+
+#: `string indices must be integers` / `list indices must be integers`
+_BAD_INDEX = re.compile(r"(string|list|int) indices must be integers")
+
+RETURN_TYPE_NUDGE = (
+    "[type] {what} returns a plain `str`, not a dict. Do not index it with keys. "
+    "Print a slice (`print(r[:800])`) or search it (`if 'FGFR1' in r:`). "
+    "Tool results differ: some are `str`, some are `dict`, some are DataFrames - "
+    "check with `print(type(r))` before indexing."
+)
+
+
+def _return_type_hint(text: str, code: str) -> str:
+    """辞書のつもりで文字列を添字アクセスした場合に、実際の型を教える。
+
+    実測: query_pubmed は `-> str` で宣言されているのに、モデルは
+    dict のつもりで r['results'] と書いて落ちた。
+    """
+    if not _BAD_INDEX.search(text or ""):
+        return ""
+    called = [n for n in _FAILED_CALL.findall(code or "") if TOOL_RETURNS.get(n) == "str"]
+    what = f"`{called[0]}`" if called else "That tool"
+    return RETURN_TYPE_NUDGE.format(what=what)
+
+
 class FormatReminderLLM:
     """invoke のたびに、会話の最後尾へ出力形式の念押しを差し込む薄い包み。
 
@@ -555,7 +583,18 @@ class FormatReminderLLM:
         # 放っておくと同じ呼び方を繰り返して、ステップを捨て続ける
         last = messages[-1] if messages else None
         content = getattr(last, "content", "") or ""
-        for hint in (_signature_hint(content), _unavailable_hint(content), _api_error_hint(content)):
+        # 直前に実行したコード。どのツールを呼んだかは観測ではなくコードにある
+        code = ""
+        for message in reversed(messages[:-1]):
+            if getattr(message, "type", "") == "ai" and isinstance(getattr(message, "content", None), str):
+                code = message.content
+                break
+        for hint in (
+            _signature_hint(content),
+            _unavailable_hint(content),
+            _return_type_hint(content, code),
+            _api_error_hint(content),
+        ):
             if hint:
                 text += "\n" + hint
         if self._min_steps:

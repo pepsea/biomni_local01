@@ -59,3 +59,67 @@ biomni のシステムプロンプトにはこうあります。
 **成功した観測も、文脈を壊します。** エラーばかり見ていましたが、
 探索が浅くなる原因として、成功した巨大な出力のほうが質が悪い。
 エラーは 1 行ですが、成功した JSON は 10,000 文字です。
+
+---
+
+## 返り値は辞書とは限らない
+
+```
+0 execute      # Query PubMed for papers linking FGFR1 to osteoporosis
+1 observation  Error: string indices must be integers, not 'str'
+2 execute      # Check the structure of the PubMed query results
+3 observation  <class 'str'>
+```
+
+ステップ 2 は**正しい対処**です（前節の助言どおり、丸ごと出さずに
+`type()` を見た）。ただ、1 ステップ使って分かったのが「文字列だった」
+だけなのは惜しい。
+
+`query_pubmed` は署名にこう書いてあります。
+
+```python
+def query_pubmed(...) -> str:
+```
+
+**宣言されているのに、モデルは辞書だと思って `r['results']` と書きます。**
+biomni のツールは返り値が揃っておらず、文字列・辞書・DataFrame が混在します。
+
+### 直し方
+
+ツールを名前空間に入れるとき（§38）、返り値の**注釈がある**ものだけ
+型名も控えます。47 個中 9 個に注釈がありました。注釈が無いものは
+黙ります。推測で型を言うと、別の間違いを誘発します。
+
+```
+[type] `query_pubmed` returns a plain `str`, not a dict.
+       Do not index it with keys. Print a slice (`print(r[:800])`)
+       or search it (`if 'FGFR1' in r:`).
+       Tool results differ: some are `str`, some are `dict`,
+       some are DataFrames - check with `print(type(r))` before indexing.
+```
+
+型が分からないツールには「That tool」と一般形で言い、断言しません。
+
+プロンプトの規則にも入れました。
+
+```
+- ツールの返り値は辞書とは限らない。文字列のものも DataFrame のものもある。
+  添字で取り出す前に `print(type(r))` を見ること。
+```
+
+## この一連で分かったこと
+
+観測から学べることは、エラーの文面だけではありません。
+
+| 観測 | こちらが足せる情報 |
+|---|---|
+| `unexpected keyword argument` | 実物の署名（§37） |
+| `name 'x' is not defined` | 読み込み済みか否か（§38） |
+| `cannot import name` | import は要らない（§38） |
+| `Invalid fields parameter value` | `fields=` を外せ（§39） |
+| `success: False` | 同じ問いを引ける別の DB（§39） |
+| `output is too long` | 何を print すべきか（§40） |
+| `string indices must be integers` | 実物の返り値の型（§40） |
+
+いずれも **こちらが持っている情報で、モデルが持っていないもの** です。
+渡さなければ、モデルは総当たりで探し、文脈を使い切ります。
