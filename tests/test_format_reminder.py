@@ -475,3 +475,33 @@ def test_return_types_are_recorded_from_annotations():
     literature = importlib.import_module("biomni.tool.literature")
     assert _return_type_name(literature.query_pubmed) == "str"
     assert _return_type_name(lambda x: x) == "", "注釈が無ければ空"
+
+
+# ------------------------------------------------------------ 素の KeyError
+# 実測: 観測が `Error: 'results'` だけ。文面から何も読み取れない。
+# query_uniprot は成功して辞書を返したが、results というキーは無かった。
+
+
+def test_a_bare_key_error_says_what_to_look_at():
+    from biomni_hypo.llm import _key_error_hint
+
+    hint = _key_error_hint("Error: 'results'")
+    assert "no key `results`" in hint
+    assert "print(list(r.keys())" in hint
+    assert "never assume `r['results']`" in hint.lower()
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Error: connection refused by host",
+        "Error: string indices must be integers, not 'str'",
+        "Title: 'Something' in quotes but a real observation",
+        "",
+    ],
+)
+def test_other_observations_are_not_mistaken_for_key_errors(text):
+    """引用符があるだけで KeyError 扱いしないこと。"""
+    from biomni_hypo.llm import _key_error_hint
+
+    assert _key_error_hint(text) == ""

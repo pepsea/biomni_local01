@@ -546,6 +546,25 @@ def _return_type_hint(text: str, code: str) -> str:
     return RETURN_TYPE_NUDGE.format(what=what)
 
 
+#: 素の KeyError。観測には `Error: 'results'` としか出ない。
+#: 他のエラーと違い、文面から何も読み取れないので必ず補うこと。
+_BARE_KEY_ERROR = re.compile(r"^Error:\s*'([^']{1,60})'\s*$")
+
+KEY_ERROR_NUDGE = (
+    "[type] That was a KeyError: the result has no key `{key}`. "
+    "You guessed the shape. Print the keys first: "
+    "`print(type(r)); print(list(r.keys()) if isinstance(r, dict) else str(r)[:800])` "
+    "and index only what is actually there. "
+    "Result shapes differ between tools - never assume `r['results']`."
+)
+
+
+def _key_error_hint(text: str) -> str:
+    """`Error: 'results'` だけの観測に、何を見ればよいかを足す。"""
+    match = _BARE_KEY_ERROR.match((text or "").strip())
+    return KEY_ERROR_NUDGE.format(key=match.group(1)) if match else ""
+
+
 class FormatReminderLLM:
     """invoke のたびに、会話の最後尾へ出力形式の念押しを差し込む薄い包み。
 
@@ -593,6 +612,7 @@ class FormatReminderLLM:
             _signature_hint(content),
             _unavailable_hint(content),
             _return_type_hint(content, code),
+            _key_error_hint(content),
             _api_error_hint(content),
         ):
             if hint:

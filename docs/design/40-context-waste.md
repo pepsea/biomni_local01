@@ -120,6 +120,50 @@ biomni のツールは返り値が揃っておらず、文字列・辞書・Data
 | `success: False` | 同じ問いを引ける別の DB（§39） |
 | `output is too long` | 何を print すべきか（§40） |
 | `string indices must be integers` | 実物の返り値の型（§40） |
+| `Error: 'results'`（素の KeyError） | 実際のキーの見方（§40） |
 
 いずれも **こちらが持っている情報で、モデルが持っていないもの** です。
 渡さなければ、モデルは総当たりで探し、文脈を使い切ります。
+
+
+---
+
+## 素の KeyError は、観測として最悪の形
+
+```
+4 execute      uniprot_results = query_uniprot("FGFR1 AND bone", max_results=3)
+               print([f"..." for r in uniprot_results['results']])
+5 observation  Error: 'results'
+```
+
+呼び出しは**成功しています**。`query_uniprot` の署名は
+`(prompt=None, endpoint=None, max_results=5)` なので `max_results` は正しく、
+返ってきた辞書に `results` というキーが無かっただけです。
+
+ところが Python の `KeyError` は、文字列化するとキー名しか残りません。
+観測は `Error: 'results'` の 1 行です。**型も、実際のキーも、何も分からない。**
+他のどのエラーより情報が少ない形です。
+
+```
+[type] That was a KeyError: the result has no key `results`.
+       You guessed the shape. Print the keys first:
+       `print(type(r)); print(list(r.keys()) if isinstance(r, dict) else str(r)[:800])`
+       and index only what is actually there.
+       Result shapes differ between tools - never assume `r['results']`.
+```
+
+引用符が入っているだけの普通の観測を KeyError と取り違えないよう、
+**観測全体が `Error: '...'` だけの形**のときに限って出します。
+
+## 教訓（追記）
+
+ステップ 2〜3 は、前節の助言どおりに動いた例です。
+
+```
+2 execute      print(type(pubmed_results)); print(str(pubmed_results)[:800])
+3 observation  <class 'str'>
+               Title: When X Does Not Mark the Spot: ... FGF23, SGK3, FGFR1 ...
+```
+
+丸ごと出さずに型と先頭を見て、**FGFR1 を含む実際の論文**に辿り着いています。
+助言は効きます。効かないのは、こちらが黙っている場所だけです。
