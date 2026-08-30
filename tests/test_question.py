@@ -250,3 +250,34 @@ def test_the_prompt_discourages_printing_whole_results():
         prompt = q.to_prompt(language)
         assert "print(" in prompt, language
         assert ("丸ごと" in prompt) or ("whole result" in prompt), language
+
+
+def test_the_prompt_teaches_one_safe_print_form():
+    """どの型でも通る形だけを教えること。`print(r[:800])` は辞書で壊れる。
+
+    禁止として出すのは構わない。**勧めて**いなければよい。
+    """
+    q = ResearchQuestion.from_text("TNBC で PARP 阻害剤耐性を規定する因子は？")
+    for language in ("ja", "en"):
+        prompt = q.to_prompt(language)
+        assert "print(str(r)[:800])" in prompt, language
+        for index in _positions(prompt, "print(r[:800])"):
+            around = prompt[max(0, index - 60) : index + 60]
+            assert ("書かない" in around) or ("Do NOT" in around), (
+                f"{language}: 壊れる形を勧めている: {around}"
+            )
+
+
+def _positions(text: str, needle: str) -> list[int]:
+    out, start = [], text.find(needle)
+    while start != -1:
+        out.append(start)
+        start = text.find(needle, start + 1)
+    return out
+
+
+def test_the_prompt_asks_for_flat_code():
+    """インデントのあるブロックが、いちばん壊れるところ。"""
+    q = ResearchQuestion.from_text("TNBC で PARP 阻害剤耐性を規定する因子は？")
+    assert "平らに書く" in q.to_prompt("ja")
+    assert "FLAT code" in q.to_prompt("en")

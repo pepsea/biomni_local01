@@ -445,7 +445,7 @@ def test_a_string_result_indexed_as_a_dict_is_explained():
             "<execute>r = query_pubmed(query='FGFR1 osteoporosis')\nprint(r['results'])</execute>",
         )
         assert "`query_pubmed` returns a plain `str`" in hint
-        assert "print(r[:800])" in hint
+        assert "print(str(r)[:800])" in hint, "str() を通す形だけを教えること"
         assert "print(type(r))" in hint
     finally:
         llm_module.TOOL_RETURNS.pop("query_pubmed", None)
@@ -505,3 +505,52 @@ def test_other_observations_are_not_mistaken_for_key_errors(text):
     from biomni_hypo.llm import _key_error_hint
 
     assert _key_error_hint(text) == ""
+
+
+# ------------------------------------------- 助言そのものが誤りを教えていた
+# 実測: `print(r[:800])` と書いた助言を、モデルが辞書に対して使い、
+# unhashable type: 'slice' で 3 回落ちた。助言のコード例は、
+# どの型でも通る形だけにすること。
+
+
+def test_no_hint_teaches_a_form_that_breaks_on_dicts():
+    """助言に出すコード例が、辞書で壊れる形になっていないこと。"""
+    import re
+
+    import biomni_hypo.llm as llm_module
+
+    texts = [
+        getattr(llm_module, name)
+        for name in dir(llm_module)
+        if name.endswith("NUDGE") and isinstance(getattr(llm_module, name), str)
+    ]
+    assert texts, "NUDGE が 1 つも見つからない"
+    bad = re.compile(r"print\(r\[:")     # str() を通していない
+    for text in texts:
+        assert not bad.search(text), f"辞書で壊れる例を教えている: {text[:80]}"
+
+
+def test_slicing_a_dict_is_explained():
+    from biomni_hypo.llm import _slice_hint
+
+    hint = _slice_hint("Error: unhashable type: 'slice'")
+    assert "print(str(r)[:800])" in hint
+    assert "never need to check the type" in hint
+    assert _slice_hint("Error: something else") == ""
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Error: expected an indented block after 'if' statement on line 4",
+        "IndentationError: unexpected indent",
+        "SyntaxError: invalid syntax",
+    ],
+)
+def test_broken_code_is_told_to_go_flat(text):
+    from biomni_hypo.llm import _syntax_hint
+
+    hint = _syntax_hint(text)
+    assert "FLAT code" in hint
+    assert "no `if`" in hint
+    assert "isinstance" in hint, "分岐が要らない理由まで言う"

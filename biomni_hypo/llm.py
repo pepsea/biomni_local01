@@ -527,7 +527,7 @@ _BAD_INDEX = re.compile(r"(string|list|int) indices must be integers")
 
 RETURN_TYPE_NUDGE = (
     "[type] {what} returns a plain `str`, not a dict. Do not index it with keys. "
-    "Print a slice (`print(r[:800])`) or search it (`if 'FGFR1' in r:`). "
+    "Print `print(str(r)[:800])` - str() first, ALWAYS. "
     "Tool results differ: some are `str`, some are `dict`, some are DataFrames - "
     "check with `print(type(r))` before indexing."
 )
@@ -563,6 +563,41 @@ def _key_error_hint(text: str) -> str:
     """`Error: 'results'` だけの観測に、何を見ればよいかを足す。"""
     match = _BARE_KEY_ERROR.match((text or "").strip())
     return KEY_ERROR_NUDGE.format(key=match.group(1)) if match else ""
+
+
+#: 辞書を slice した。`print(r[:800])` は文字列にしか使えない
+_SLICE_ON_DICT = re.compile(r"unhashable type: ['\"]slice['\"]")
+
+SLICE_NUDGE = (
+    "[type] You sliced a dict: `r[:800]` only works on strings. "
+    "`print(str(r)[:800])` works for EVERY type - use that form always, "
+    "and you never need to check the type first."
+)
+
+#: インデントが崩れた。小さいモデルは if/for のブロックを書き切れない
+_INDENT_ERROR = re.compile(
+    r"expected an indented block|IndentationError|unexpected indent|invalid syntax"
+)
+
+FLAT_CODE_NUDGE = (
+    "[syntax] Your code did not parse. Write FLAT code in <execute>: "
+    "no `if`, no `for`, no `try` - just one statement per line. "
+    "`print(str(r)[:800])` works for every result type, so you do not need "
+    "any isinstance check. Re-send the same queries without the branches."
+)
+
+
+def _slice_hint(text: str) -> str:
+    return SLICE_NUDGE if _SLICE_ON_DICT.search(text or "") else ""
+
+
+def _syntax_hint(text: str) -> str:
+    """構文が通らなかったときは、分岐を捨てさせる。
+
+    実測: `if isinstance(...):` の次の行がインデントされておらず、2 回落ちた。
+    ブロックを書かせなければ、この失敗は起きない。
+    """
+    return FLAT_CODE_NUDGE if _INDENT_ERROR.search(text or "") else ""
 
 
 class FormatReminderLLM:
@@ -612,6 +647,8 @@ class FormatReminderLLM:
             _signature_hint(content),
             _unavailable_hint(content),
             _return_type_hint(content, code),
+            _slice_hint(content),
+            _syntax_hint(content),
             _key_error_hint(content),
             _api_error_hint(content),
         ):

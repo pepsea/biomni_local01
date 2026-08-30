@@ -376,12 +376,13 @@ Rules:
   NEVER write an import statement for a tool (no `from biomni.tool... import ...`,
   no `import biomni...`). Just call it: `result = query_uniprot(...)`.
   If a tool name is not defined, it is unavailable here - switch to another tool.
-- NEVER print a whole result object. Assign it to a variable and print only what
-  you need (`print(list(r.keys()))`, `print(r['results'][0])`, `print(str(r)[:800])`).
+- NEVER print a whole result object. Use exactly this form, which works for
+  every result type: `print(str(r)[:800])`. Do NOT write `print(r[:800])` -
+  that fails on dicts with "unhashable type: 'slice'".
   A truncated observation costs thousands of tokens and tells you almost nothing.
-- Tool results are not all dicts. Some are plain strings, some are DataFrames.
-  Run `print(type(r))` before indexing, or you will get
-  "string indices must be integers".
+- Write FLAT code: no `if`, no `for`, no `try` inside <execute>. One statement
+  per line. Because `print(str(r)[:800])` works for every type, you never need
+  an isinstance check - and indented blocks are where the code breaks.
 """.strip()
     + "\n\n"
     + _FORMAT_REMINDER
@@ -402,12 +403,13 @@ _JA_RULES = (
   ツールを import してはいけない（`from biomni.tool... import ...` も
   `import biomni...` も書かないこと）。`result = query_uniprot(...)` と直接呼ぶ。
   名前が未定義なら、その環境には無い。別のツールに切り替えること。
-- 結果を丸ごと print しないこと。変数に受けて、必要な部分だけ出す
-  （`print(list(r.keys()))`、`print(r['results'][0])`、`print(str(r)[:800])`）。
+- 結果を丸ごと print しないこと。どの型でも通る形はこれ 1 つ:
+  `print(str(r)[:800])`。`print(r[:800])` と書かないこと（辞書だと
+  "unhashable type: 'slice'" になる）。
   切り詰められた観測は数千トークンを食う割に、ほとんど何も分からない。
-- ツールの返り値は辞書とは限らない。文字列のものも DataFrame のものもある。
-  添字で取り出す前に `print(type(r))` を見ること。見ないと
-  "string indices must be integers" になる。
+- <execute> の中は平らに書くこと。`if`・`for`・`try` を使わない。1 行 1 文。
+  `print(str(r)[:800])` はどの型でも通るので型の判定は要らない。
+  インデントのあるブロックが、いちばん壊れるところ。
 """.strip()
     + "\n\n"
     + _FORMAT_REMINDER
