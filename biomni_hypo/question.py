@@ -383,9 +383,11 @@ Rules:
 - Write FLAT code: no `if`, no `for`, no `try` inside <execute>. One statement
   per line. Because `print(str(r)[:800])` works for every type, you never need
   an isinstance check - and indented blocks are where the code breaks.
-- For literature, query BOTH `query_pubmed` AND `query_europepmc`. Europe PMC
-  covers preprints, patents and books that PubMed does not, so a search that
-  found nothing in one may still find something in the other.
+- For literature, do not stop at one source. Query `query_pubmed`,
+  `query_europepmc` AND `query_arxiv` (whichever are available). Europe PMC
+  covers preprints, patents and books that PubMed does not; arXiv carries
+  methods and computational work that neither indexes. A search that found
+  nothing in one may still find something in another.
 - A failed tool call is NOT evidence of absence. If a query errored, say that the
   query errored - never write that the data does not exist or that no evidence
   was found. Fix the call or use another database first.
@@ -416,9 +418,10 @@ _JA_RULES = (
 - <execute> の中は平らに書くこと。`if`・`for`・`try` を使わない。1 行 1 文。
   `print(str(r)[:800])` はどの型でも通るので型の判定は要らない。
   インデントのあるブロックが、いちばん壊れるところ。
-- 文献は `query_pubmed` と `query_europepmc` の両方を引くこと。Europe PMC は
-  プレプリント・特許・書籍を収載しており、PubMed に無い文献が見つかる。
-  片方で 0 件でも、もう片方にはあることがある。
+- 文献は 1 つの情報源で済ませないこと。`query_pubmed`・`query_europepmc`・
+  `query_arxiv` を（使えるものは）すべて引く。Europe PMC はプレプリント・
+  特許・書籍を、arXiv は手法や計算系の仕事を収載しており、どちらも PubMed に
+  無いものが見つかる。1 つで 0 件でも、別のものにはあることがある。
 - 呼び出しが失敗したことは、「データが無い」ことの根拠にならない。
   クエリが失敗したなら「クエリが失敗した」と書くこと。「根拠が得られなかった」
   「データが存在しない」と書いてはいけない。まず直すか、別の DB を当たること。

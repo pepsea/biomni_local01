@@ -288,3 +288,12 @@ def test_the_prompt_forbids_concluding_absence_from_a_failed_call():
     q = ResearchQuestion.from_text("TNBC で PARP 阻害剤耐性を規定する因子は？")
     assert "根拠にならない" in q.to_prompt("ja")
     assert "NOT evidence of absence" in q.to_prompt("en")
+
+
+def test_all_three_literature_sources_are_named():
+    """文献を 1 つの情報源で済ませないこと。arXiv も含める。"""
+    q = ResearchQuestion.from_text("TNBC で PARP 阻害剤耐性を規定する因子は？")
+    for language in ("ja", "en"):
+        prompt = q.to_prompt(language)
+        for tool in ("query_pubmed", "query_europepmc", "query_arxiv"):
+            assert tool in prompt, f"{language}: {tool} が規則に出てこない"

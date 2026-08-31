@@ -84,3 +84,66 @@ API 応答をモックしたテストで、識別子が本文に出ること、P
 
 **スキーマと実物の署名がずれていないこと**も縛りました（§37 で踏んだ形を
 自分のツールで繰り返さないため）。
+
+---
+
+## 「本当に動いているか」を、実行で答える
+
+> EuropePMC の検索が本当にできているか？
+
+私の環境からは確かめられません。このサンドボックスは外向き通信が
+組織ポリシーで遮断されており、UniProt も PubMed も Europe PMC も
+等しく届きません。**「動くはずです」としか言えない立場です。**
+
+なので、そちらで実行して確かめられるものを用意しました。
+
+```
+make lit-check
+python scripts/check-literature.py "FGFR1 AND osteoporosis"
+```
+
+ツールごとに、呼べるか・件数・**識別子が本文に出ているか**・
+その識別子からリンクを作れるかを出します。識別子が出ていなければ、
+応答があっても根拠としては使えません（§3）。
+
+通っている場合:
+
+```
+  ✓ query_pubmed       識別子 5 件 / リンク可 5 件（0.8s）
+      PMID:37821999                      https://pubmed.ncbi.nlm.nih.gov/37821999/
+  ✓ query_europepmc    識別子 9 件 / リンク可 9 件（1.2s）
+      PMC10592456                        https://europepmc.org/article/PMC/PMC10592456
+```
+
+通っていない場合（こちらの環境での実際の出力）:
+
+```
+  ✗ query_pubmed       Error querying PubMed: HTTPSConnectionPool(...)
+  ✗ query_europepmc    Error: Europe PMC query failed: ProxyError: ...
+  ✗ query_arxiv        Error querying arXiv: HTTPSConnectionPool(...)
+  − query_scholar      ポリシーで不可: Google Scholar のスクレイピングは ToS 違反の懸念
+```
+
+ポリシーで外しているものは `−` です。**失敗ではなく、意図した状態**なので
+区別して出します。
+
+### 作りながら踏んだこと
+
+最初は応答が `Error:` で始まるかどうかで失敗を判定していました。
+biomni のツールは `Error querying PubMed: ...` と返すので、
+**失敗を「識別子が出ていない」と誤分類していました。**
+自分の環境で実際に走らせて気付きました。判定は実物の出力で決めること。
+
+## arXiv も引かせる
+
+規則を「両方」から「使えるものは全部」に広げました。
+
+```
+- 文献は 1 つの情報源で済ませないこと。`query_pubmed`・`query_europepmc`・
+  `query_arxiv` を（使えるものは）すべて引く。Europe PMC はプレプリント・
+  特許・書籍を、arXiv は手法や計算系の仕事を収載しており、どちらも PubMed に
+  無いものが見つかる。
+```
+
+`query_arxiv` は `arxiv` パッケージが要ります。無ければ案内から自動で
+外れるので（§38）、規則に書いてあっても存在しないものを呼ぶことはありません。

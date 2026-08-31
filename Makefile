@@ -1,4 +1,4 @@
-.PHONY: help update install install-min test lint notebook up api check-env doctor ollama-check app-check model-check models fetch check \
+.PHONY: help update lit-check install install-min test lint notebook up api check-env doctor ollama-check app-check model-check models fetch check \
 	docker-up docker-down docker-logs docker-ps docker-rebuild docker-check docker-stop-ollama \
 	local-install local-uninstall service-install service-status service-logs service-update service-uninstall
 
@@ -15,6 +15,7 @@ help:
 	@echo "ollama-check Ollama に繋がらないときの切り分け"
 	@echo "app-check    biomni を読み込めないときの切り分け"
 	@echo "model-check  モデルを選択できないときの切り分け"
+	@echo "lit-check    文献検索（PubMed / Europe PMC / arXiv）が動くか実際に叩く"
 	@echo "api          uvicorn を直接起動（確認なし）"
 	@echo "models       ローカルの Ollama にあるモデルを一覧"
 	@echo "fetch        許可リストのデータセットを取得"
@@ -72,6 +73,9 @@ ollama-check:
 
 app-check:
 	bash scripts/diagnose-app.sh
+
+lit-check:
+	$(if $(wildcard .venv/bin/python),.venv/bin/python,python) scripts/check-literature.py $(Q)
 
 model-check:
 	bash scripts/diagnose-models.sh

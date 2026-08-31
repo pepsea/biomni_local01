@@ -561,3 +561,50 @@ def test_running_twice_is_quiet(repo_copy, tmp_path):
     second = _preflight_in(repo_copy, {"PATH": f"{fake}:/usr/bin:/bin"})
     assert "ホストと一致" in second.stdout
     assert (repo_copy / ".env").read_text(encoding="utf-8").count("APP_UID=") == 1
+
+
+# ------------------------------------------------- 文献検索が本当に動くか
+# 「使えるはず」ではなく「使える」を見るためのもの。ネットワークが無い環境でも
+# 失敗の理由が読めること（実測: すべて外向き通信が塞がれた環境で確認した）。
+
+
+def _literature_module():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "check_literature", ROOT / "scripts" / "check-literature.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_a_denied_tool_is_not_reported_as_a_failure():
+    """ポリシーで外しているものは、失敗ではない（意図した状態）。"""
+    from biomni_hypo.policy import ResourcePolicy
+
+    module = _literature_module()
+    assert module._check("query_scholar", "x", ResourcePolicy.load()) is True
+
+
+def test_a_tool_error_is_reported_as_a_failure(capsys):
+    """biomni は "Error querying PubMed: ..." と返す。"Error:" だけ見ると取り逃す。"""
+    from biomni_hypo.policy import ResourcePolicy
+
+    module = _literature_module()
+    module._load = lambda name: (lambda q: "Error querying PubMed: no network", "")
+    assert module._check("query_pubmed", "x", ResourcePolicy.load()) is False
+    assert "Error querying PubMed" in capsys.readouterr().out
+
+
+def test_results_with_identifiers_pass(capsys):
+    from biomni_hypo.policy import ResourcePolicy
+
+    module = _literature_module()
+    module._load = lambda name: (
+        lambda q: "Title: X\nIDs: PMID:37821999 PMC10592456\nAbstract: …", ""
+    )
+    assert module._check("query_europepmc", "x", ResourcePolicy.load()) is True
+    out = capsys.readouterr().out
+    assert "リンク可" in out
+    assert "https://pubmed.ncbi.nlm.nih.gov/37821999/" in out
