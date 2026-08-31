@@ -218,6 +218,10 @@ def build_agent(
     unusable_tools = _drop_tools_with_missing_lazy_imports(agent)
     removed = _apply_tool_policy(agent, policy)
 
+    # biomni に無い文献検索を足す（§44）。configure() の前に入れること。
+    # 後から入れるとシステムプロンプトの一覧に載らず、案内されない
+    _add_extra_tools(agent, policy)
+
     # module2api を変更したので、システムプロンプトを作り直す。
     agent.configure()
 
@@ -397,6 +401,30 @@ def _resolve_model_and_source(args: tuple[Any, ...], kwargs: dict[str, Any]) -> 
         # biomni はモデル名から推定する。claude で始まれば Anthropic
         source = "Anthropic" if str(model).startswith("claude") else ""
     return str(model), str(source)
+
+
+def _add_extra_tools(agent: Any, policy: ResourcePolicy) -> list[str]:
+    """biomni に無いツールを module2api に足す。
+
+    agent.add_tool() は docstring を LLM に解析させるので使わない
+    （モックのモデルでは落ちる）。スキーマは自分で書いて直接入れる。
+
+    ポリシーで拒否されているものは足さない。足す側でも同じ判定を通すこと。
+    """
+    from biomni_hypo.extra_tools import EXTRA_SCHEMAS, MODULE_NAME
+
+    added: list[str] = []
+    schemas = [s for s in EXTRA_SCHEMAS if policy.check_tool(s["name"]).allowed]
+    if not schemas:
+        return added
+    agent.module2api.setdefault(MODULE_NAME, [])
+    known = {a.get("name") for a in agent.module2api[MODULE_NAME]}
+    for schema in schemas:
+        if schema["name"] not in known:
+            agent.module2api[MODULE_NAME].append(schema)
+            added.append(schema["name"])
+    log.info("独自ツールを追加しました: %s", ", ".join(added) or "なし")
+    return added
 
 
 def _preload_tools(agent: Any) -> list[str]:

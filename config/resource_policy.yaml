@@ -104,6 +104,13 @@ tools:
       reason: 同上。必要なら正規の Search API 契約に置換
     - name: advanced_web_search_claude
       reason: 外部 LLM API（Anthropic）を呼ぶ。ローカル完結の前提に反する
+  # 独自に足したツール（biomni には無い）。帰属を残すため明示的に書く
+  allow_notes:
+    - name: query_europepmc
+      license: Free-to-use REST API
+      attribution: Europe PMC (EMBL-EBI)
+      url: https://europepmc.org/
+      note: 公開 REST API。鍵不要。個々の論文のライセンスは記事ごとに異なる
   review_required:
     - name: query_cbioportal
       reason: 収載元データセットごとにライセンスが異なる

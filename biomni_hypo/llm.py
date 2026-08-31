@@ -477,8 +477,9 @@ _ALTERNATIVES: dict[str, tuple[str, ...]] = {
     "query_chembl": ("query_pubchem", "query_opentarget", "query_drug_interactions"),
     "query_pubchem": ("query_chembl", "query_unichem"),
     # 文献
-    "query_pubmed": ("query_arxiv", "query_scholar"),
-    "query_arxiv": ("query_pubmed",),
+    "query_pubmed": ("query_europepmc", "query_arxiv"),
+    "query_europepmc": ("query_pubmed", "query_arxiv"),
+    "query_arxiv": ("query_pubmed", "query_europepmc"),
 }
 
 #: どのツールが落ちたかを観測から拾う

@@ -395,9 +395,11 @@ def test_every_alternative_is_a_real_tool():
     pytest.importorskip("biomni", reason="biomni が無い環境ではスキップ")
     from biomni.utils import read_module2api
 
+    from biomni_hypo.extra_tools import EXTRA_SCHEMAS
     from biomni_hypo.llm import _ALTERNATIVES
 
     real = {a["name"] for apis in read_module2api().values() for a in apis}
+    real |= {s["name"] for s in EXTRA_SCHEMAS}      # 自前で足したツールも実在する
     listed = set(_ALTERNATIVES) | {t for v in _ALTERNATIVES.values() for t in v}
     assert not (listed - real), f"存在しないツール名: {sorted(listed - real)}"
 

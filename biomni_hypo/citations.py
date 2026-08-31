@@ -38,6 +38,14 @@ PATTERNS: tuple[Pattern, ...] = (
     ),
     Pattern(
         ResourceKind.LITERATURE,
+        "pmcid",
+        # Europe PMC は PMCID を返す。PubMed には無い文献（プレプリント等）は
+        # PMID を持たないことがあるので、これが唯一の識別子になる
+        re.compile(r"\b(PMC\d{6,9})\b"),
+        url_template="https://europepmc.org/article/PMC/{id}",
+    ),
+    Pattern(
+        ResourceKind.LITERATURE,
         "doi",
         re.compile(r"\b(10\.\d{4,9}/[-._;()/:A-Za-z0-9]*[A-Za-z0-9])"),
         prefix="DOI:",

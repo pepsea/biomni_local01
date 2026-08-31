@@ -580,3 +580,22 @@ def test_advertised_tools_are_callable_by_name(policy):
     advertised = {a["name"] for apis in bundle.agent.module2api.values() for a in apis}
     missing = sorted(advertised - set(names))
     assert not missing, f"案内しているのに名前空間に無い: {missing[:5]}"
+
+
+def test_our_own_tools_reach_the_system_prompt(policy):
+    """自前で足したツールが、案内にも名前空間にも入ること。
+
+    configure() の後に module2api を触ると、一覧に載らず案内されない。
+    """
+    import biomni_hypo.llm as llm_module
+    from biomni_hypo.extra_tools import EXTRA_SCHEMAS
+
+    with MockOllama(replies=["ok"]) as mock:
+        bundle = build_agent(_settings(mock), policy)
+
+    advertised = {a["name"] for apis in bundle.agent.module2api.values() for a in apis}
+    for schema in EXTRA_SCHEMAS:
+        name = schema["name"]
+        assert name in advertised, f"{name} が module2api に無い"
+        assert name in (bundle.agent.system_prompt or ""), f"{name} がプロンプトに無い"
+        assert name in llm_module.PRELOADED_TOOLS, f"{name} が名前空間に無い"
