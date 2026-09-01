@@ -2,6 +2,19 @@
 	docker-up docker-down docker-logs docker-ps docker-rebuild docker-check docker-stop-ollama \
 	local-install local-uninstall service-install service-status service-logs service-update service-uninstall
 
+# 知らないターゲットを叩かれたときに、黙って "No rule to make target" で
+# 終わらせない。
+#
+# 実測: `make update` を案内したが、update はその案内より後に足した
+# ターゲットだった。pull していない手元には存在せず、利用者には
+# 「そんなものは無い」としか見えなかった。
+.DEFAULT:
+	@printf '\n\033[31m✗\033[0m そのターゲットはありません: $@\n'
+	@printf '  新しく足したターゲットかもしれません。取り込んでから試してください:\n'
+	@printf '      git pull && make $@\n\n'
+	@printf '  使えるものの一覧:  make help\n\n'
+	@exit 1
+
 help:
 	@echo "install      依存を全部入れる（biomni 含む・重い）"
 	@echo "install-min  最小構成（テストとノートブック 03 まで動く）"

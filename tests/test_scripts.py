@@ -608,3 +608,28 @@ def test_results_with_identifiers_pass(capsys):
     out = capsys.readouterr().out
     assert "リンク可" in out
     assert "https://pubmed.ncbi.nlm.nih.gov/37821999/" in out
+
+
+def test_an_unknown_make_target_explains_itself():
+    """`No rule to make target` で終わらせないこと。
+
+    実測: 案内した `make update` が、案内より後に足したターゲットだった。
+    pull していない手元には存在せず、「そんなものは無い」としか見えなかった。
+    """
+    proc = subprocess.run(  # noqa: S603
+        ["make", "no-such-target-for-test"],
+        capture_output=True, text=True, timeout=60, cwd=ROOT,
+    )
+    assert proc.returncode != 0
+    assert "そのターゲットはありません" in proc.stdout
+    assert "git pull && make no-such-target-for-test" in proc.stdout
+
+
+def test_real_make_targets_still_work():
+    """.DEFAULT を足したせいで、既存のターゲットが壊れていないこと。"""
+    for target in ("help", "test", "up", "update", "lit-check"):
+        proc = subprocess.run(  # noqa: S603
+            ["make", "-n", target], capture_output=True, text=True, timeout=60, cwd=ROOT,
+        )
+        assert proc.returncode == 0, f"{target}: {proc.stderr}"
+        assert "そのターゲットはありません" not in proc.stdout, target
