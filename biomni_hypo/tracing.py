@@ -96,6 +96,7 @@ PARSE_GIVEUP_MARK = "execution terminated due to repeated parsing errors"
 MAX_CONSECUTIVE_PARSE_ERRORS = 3
 
 #: 差し戻しが起きたときに UI・ログへ出す原因と対処
+#: 手掛かりが何も無いときの一般形。可能なら parse_error_hint() を使うこと。
 PARSE_ERROR_HINT = (
     "モデルが <execute> / <solution> のどちらも出力しませんでした。"
     "よくある原因: (1) context が尽きてタグの規定が落ちている"
@@ -104,6 +105,69 @@ PARSE_ERROR_HINT = (
     "(3) 指示追従性の低いモデル。より大きな num_ctx / num_predict か、"
     "別のモデル（qwen3:14b 以上、または Claude）を試してください。"
 )
+
+#: 「まだ何も積まれていない」とみなすステップ数。ここでの失敗に context は無関係
+_EARLY_STEPS = 3
+
+
+def parse_error_hint(bundle: Any, step_idx: int) -> str:
+    """差し戻しの理由を、その場で測って書く。
+
+    実測: ステップ 0 での差し戻しに「context が尽きて」と出していた。
+    0 手目にはまだ何も積まれていないので、それはあり得ない。
+    原因の一覧を並べるのをやめ、**測れるものは測って**言うこと
+    （docs/design/45）。
+    """
+    settings = getattr(bundle, "settings", None)
+    num_ctx = getattr(settings, "num_ctx", 0) or 0
+    prompt_tokens = getattr(bundle, "estimated_prompt_tokens", 0) or 0
+    num_predict = getattr(settings, "num_predict", 0) or 0
+    model = getattr(settings, "model", "") or "（不明）"
+
+    if not num_ctx:
+        return PARSE_ERROR_HINT
+
+    # 1. そもそもプロンプトが入りきっていないか
+    if prompt_tokens and prompt_tokens >= num_ctx * 0.8:
+        return (
+            f"モデルが <execute> / <solution> のどちらも出力しませんでした。"
+            f"システムプロンプトだけで num_ctx の {prompt_tokens / num_ctx:.0%} を"
+            f"占めています（約 {prompt_tokens:,} / {num_ctx:,} トークン）。"
+            f"**最初から入りきっていません。** num_ctx を上げるか、"
+            f"ツールモジュールを絞ってください（docs/design/22）。"
+        )
+
+    # 2. 早い段階の失敗に context は関係ない
+    if step_idx < _EARLY_STEPS:
+        # 使用量が分からないときに「約 0 トークン」と書かない
+        usage = (
+            f"（まだ約 {prompt_tokens:,} / {num_ctx:,} トークンしか使っていません）"
+            if prompt_tokens
+            else "（まだ何も積まれていません）"
+        )
+        return (
+            "モデルが <execute> / <solution> のどちらも出力しませんでした。"
+            f"ステップ {step_idx} での失敗なので、**context 切れではありません**{usage}。"
+            f"指示追従性の問題です。num_predict={num_predict:,} が小さいと "
+            "<think> の途中で生成が尽きることもあります。"
+            # いま使っているモデルを勧め返さないこと（qwen3:14b で動かして
+            # 「qwen3:14b 以上を試せ」は助言になっていない）
+            "より指示追従性の高いモデルに替えると直ることが多いです"
+            f"（現在: {model}）。"
+        )
+
+    # 3. 後半なら、あと何手で埋まるかを添える
+    from biomni_hypo.models import TOKENS_PER_STEP, estimate_steps_until_full
+
+    budget = estimate_steps_until_full(num_ctx, prompt_tokens)
+    used = prompt_tokens + step_idx * TOKENS_PER_STEP
+    return (
+        f"モデルが <execute> / <solution> のどちらも出力しませんでした。"
+        f"ステップ {step_idx} 時点で約 {used:,} / {num_ctx:,} トークンを使っています"
+        f"（1 手あたり約 {TOKENS_PER_STEP:,}、埋まるまで約 {budget} 手）。"
+        f"context が尽きてタグの規定が落ちている可能性があります（docs/design/22）。"
+        f"num_ctx を上げるか、より大きなモデルを試してください。現在: {model}"
+    )
 
 
 @dataclass
@@ -404,9 +468,10 @@ class TracingRunner:
         if PARSE_GIVEUP_MARK in low:
             self.parsing_errors += 1
             self.stopped_reason = (
-                "モデルがタグ付きの応答を出せず、biomni が打ち切りました。" + PARSE_ERROR_HINT
+                "モデルがタグ付きの応答を出せず、biomni が打ち切りました。"
+                + parse_error_hint(self.bundle, idx)
             )
-            log.error("biomni が解析エラーでランを打ち切りました。%s", PARSE_ERROR_HINT)
+            log.error("biomni が解析エラーでランを打ち切りました。%s", self.stopped_reason)
             return Step(
                 idx=idx,
                 kind=StepKind.PARSING_ERROR,
@@ -422,7 +487,7 @@ class TracingRunner:
                 "（通算 %d 回 / 連続 %d 回）。%s",
                 self.parsing_errors,
                 self.consecutive_parse_errors,
-                PARSE_ERROR_HINT,
+                parse_error_hint(self.bundle, idx),
             )
             note = (
                 f"タグの無い応答を biomni が差し戻しました"
@@ -432,13 +497,13 @@ class TracingRunner:
                 # biomni の打ち切りは効かない。こちらで止める
                 self.stopped_reason = (
                     f"タグの無い応答が {self.consecutive_parse_errors} 回続いたため打ち切りました。"
-                    + PARSE_ERROR_HINT
+                    + parse_error_hint(self.bundle, idx)
                 )
                 note = self.stopped_reason
             return Step(
                 idx=idx,
                 kind=StepKind.PARSING_ERROR,
-                text=note + ("" if note is self.stopped_reason else PARSE_ERROR_HINT),
+                text=note + ("" if note is self.stopped_reason else parse_error_hint(self.bundle, idx)),
                 error=text.strip(),
                 duration_ms=duration_ms,
             )

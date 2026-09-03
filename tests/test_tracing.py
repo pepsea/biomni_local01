@@ -135,9 +135,13 @@ def test_parse_retry_is_not_classified_as_think():
     assert StepKind.PARSING_ERROR in kinds
     parse_steps = [s for s in result.steps if s.kind == StepKind.PARSING_ERROR]
     assert len(parse_steps) == 1
-    # 英文の叱責をそのまま出さず、日本語で原因と対処を出す
-    assert "差し戻し" in parse_steps[0].text
-    assert "num_ctx" in parse_steps[0].text
+    # 英文の叱責をそのまま出さず、日本語で原因と対処を出す。
+    # 文言は測った内容で変わるので（§45）、中身ではなく性質で見る:
+    # 何が起きたか・どこで起きたか・次に何をするか、が入っていること
+    text = parse_steps[0].text
+    assert "差し戻し" in text
+    assert "ステップ" in text, "どこで起きたかが無い"
+    assert ("モデル" in text) or ("num_ctx" in text), "次の一手が無い"
     # 原文も error に残す（何が起きたか追えるように）
     assert "no tags in the current response" in parse_steps[0].error
     assert result.parsing_errors == 1
@@ -363,3 +367,57 @@ def test_client_errors_are_told_apart_from_external_failures():
     assert not is_client_error("Error: Connection timed out")
     assert not is_client_error("Title: 何かの論文")
     assert not is_client_error("")
+
+
+# ------------------------------------------- 差し戻しの理由は、測って書く
+# 実測: ステップ 0 での差し戻しに「context が尽きて」と出していた。
+# 0 手目にはまだ何も積まれていないので、それはあり得ない。
+
+
+def _bundle(num_ctx=40960, prompt_tokens=17000, model="qwen3:14b", num_predict=4096):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        settings=SimpleNamespace(num_ctx=num_ctx, num_predict=num_predict, model=model),
+        estimated_prompt_tokens=prompt_tokens,
+    )
+
+
+def test_an_early_failure_is_not_blamed_on_context():
+    from biomni_hypo.tracing import parse_error_hint
+
+    hint = parse_error_hint(_bundle(), step_idx=0)
+    assert "context 切れではありません" in hint
+    assert "17,000 / 40,960" in hint, "測った数字を出すこと"
+
+
+def test_a_prompt_that_does_not_fit_is_named():
+    """プロンプトだけで num_ctx を超えていれば、それが原因。"""
+    from biomni_hypo.tracing import parse_error_hint
+
+    hint = parse_error_hint(_bundle(num_ctx=16384), step_idx=0)
+    assert "最初から入りきっていません" in hint
+    assert "104%" in hint
+
+
+def test_a_late_failure_shows_how_full_it_is():
+    from biomni_hypo.tracing import parse_error_hint
+
+    hint = parse_error_hint(_bundle(), step_idx=8)
+    assert "ステップ 8 時点で" in hint
+    assert "埋まるまで約" in hint
+
+
+def test_the_model_in_use_is_not_recommended_back():
+    """qwen3:14b で動かして「qwen3:14b 以上を試せ」は助言になっていない。"""
+    from biomni_hypo.tracing import parse_error_hint
+
+    hint = parse_error_hint(_bundle(model="qwen3:14b"), step_idx=0)
+    assert "qwen3:14b 以上" not in hint
+    assert "現在: qwen3:14b" in hint
+
+
+def test_no_context_information_falls_back_to_the_general_form():
+    from biomni_hypo.tracing import PARSE_ERROR_HINT, parse_error_hint
+
+    assert parse_error_hint(object(), step_idx=0) == PARSE_ERROR_HINT
